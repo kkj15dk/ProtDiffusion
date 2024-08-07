@@ -1,5 +1,11 @@
+# virtual environments
 .venv
+
+# data files
 *.gz
 *.gz*
 *.fasta
 *.fa
+
+# cache files
+*__pycache__

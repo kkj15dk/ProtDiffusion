@@ -1,0 +1,5 @@
+.venv
+*.gz
+*.gz*
+*.fasta
+*.fa

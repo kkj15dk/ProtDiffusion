@@ -1,0 +1,32 @@
+# Datasets
+- Download Uniref100, 90, and 50
+- Add [BOP] and [EOP] to start and end, unless it is a fragment
+- Padding '-' charcter to length (8 or 64, depending on if i use DiT or U-Net)
+- Sort for very long sequences
+- Length as additional field
+
+# Tokenizer
+- How the fuck do you do random truncation to some subset of the sequence
+- Pad to longest sequence in batch, and make attention/loss mask
+
+# Models
+- VAE
+- U-Net
+- DiT
+
+# Layers
+- SelfAttention1d
+    - head_dim
+    - num_layers
+- AttenXBlock1d
+    - num_attention_heads
+
+# Sampling
+- Sampling with differnet lengths, resolution of 8/64 bp
+
+# Long term
+- Inpianting
+- CLIP model for proteins (taxonomy, GO, InterPro, PFAM, etc.)
+- VAE for downscaling proteins, then diffusion, then upscaling (like stable diffusion)
+- KAN vs MLP
+- GROKFAST

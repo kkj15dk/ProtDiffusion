@@ -9,3 +9,7 @@
 
 # cache files
 *__pycache__
+
+# output files
+*/protein-VAE*
+/output/*

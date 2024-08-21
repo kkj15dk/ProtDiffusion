@@ -149,6 +149,7 @@ class Encoder1D(nn.Module):
         double_z: bool = True,
         mid_block_add_attention=True,
         num_attention_heads: int = 1,
+        conv_in_kernel_size: int = 3,
     ):
         super().__init__()
         self.layers_per_block = layers_per_block
@@ -156,9 +157,9 @@ class Encoder1D(nn.Module):
         self.conv_in = nn.Conv1d(
             in_channels,
             block_out_channels[0],
-            kernel_size=3,
+            kernel_size=conv_in_kernel_size,
             stride=1,
-            padding=1,
+            padding=conv_in_kernel_size // 2,
         )
 
         self.down_blocks = nn.ModuleList([])
@@ -275,6 +276,8 @@ class Decoder1D(nn.Module):
         norm_type: str = "group",  # group, spatial
         mid_block_add_attention=True,
         num_attention_heads: int = 1,
+        upsample_type: str = "conv",
+        conv_out_kernel_size: int = 3,
     ):
         super().__init__()
         self.layers_per_block = layers_per_block
@@ -326,6 +329,7 @@ class Decoder1D(nn.Module):
                 in_channels=input_channel,
                 out_channels=output_channel,
                 add_upsample=True,
+                upsample_type=upsample_type,
                 resnet_eps=1e-6,
                 resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
@@ -341,7 +345,7 @@ class Decoder1D(nn.Module):
         else:
             self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=norm_num_groups, eps=1e-6)
         self.conv_act = nn.SiLU()
-        self.conv_out = nn.Conv1d(block_out_channels[0], out_channels, 3, padding=1)
+        self.conv_out = nn.Conv1d(block_out_channels[0], out_channels, kernel_size=conv_out_kernel_size, padding=conv_out_kernel_size // 2)
 
         self.gradient_checkpointing = False
 

@@ -81,6 +81,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         latent_channels: int = 4,
         norm_num_groups: int = 32,
         num_attention_heads: int = 1,
+        upsample_type: str = "conv",
         # sample_size: int = 32,
         # scaling_factor: float = 0.18215,
         # shift_factor: Optional[float] = None,
@@ -121,6 +122,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             norm_num_groups=norm_num_groups,
             act_fn=act_fn,
             num_attention_heads=num_attention_heads,
+            upsample_type=upsample_type,
         )
 
         self.quant_conv = nn.Conv1d(2 * latent_channels, 2 * latent_channels, 1) if use_quant_conv else None
@@ -205,7 +207,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         sample_posterior: bool = False, # Should be True when training
         return_dict: bool = True,
         generator: Optional[torch.Generator] = None,
-    ) -> Union[DecoderOutput, torch.Tensor]:
+    ) -> Union[AutoencoderKLOutput1D, torch.Tensor]:
         r"""
         Args:
             sample (`torch.Tensor`): Input sample.
@@ -228,8 +230,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         else:
             z = posterior.mode()
         dec = self.decode(z, attention_masks).sample
-        dec = self.conv_out(dec)
-        logits = torch.softmax(dec, dim=1)
+        logits = self.conv_out(dec)
 
         if not return_dict:
             return (logits,)

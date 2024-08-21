@@ -11,6 +11,7 @@
 
 # Models
 - VAE
+    - Make it be deterministic in model.eval() (using mode for sampling posterior)
 - U-Net
 - DiT
 

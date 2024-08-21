@@ -95,9 +95,11 @@ class Upsample1D(nn.Module):
         self.name = name
 
         self.conv = None
-        if use_conv_transpose:
+        if self.use_conv_transpose and self.use_conv:
+            raise ValueError("Only one of use_conv or use_conv_transpose can be True.")
+        if self.use_conv_transpose:
             self.conv = nn.ConvTranspose1d(channels, self.out_channels, 4, 2, 1)
-        elif use_conv:
+        elif self.use_conv:
             self.conv = nn.Conv1d(self.channels, self.out_channels, 3, padding=1)
 
     def forward(self, inputs: torch.Tensor, output_size: Optional[int] = None) -> torch.Tensor:
@@ -773,14 +775,21 @@ class AttnUpBlock1D(nn.Module):
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
-        if upsample_type != "conv":
-            raise NotImplementedError("Alternative upsampling not implemented yet. Please use conv upsampling.")
+        if upsample_type == "conv":
+            use_conv_transpose = False
+            use_conv = True
+        elif upsample_type == "conv_transpose":
+            use_conv_transpose = True
+            use_conv = False
+        else:
+            raise ValueError(f"unknown upsample_type : {upsample_type} ")
 
         if add_upsample:
             self.upsamplers = nn.ModuleList(
                 [
                     Upsample1D(in_channels, 
-                               use_conv_transpose=True, 
+                               use_conv_transpose=use_conv_transpose,
+                               use_conv=use_conv, 
                     )
                 ]
             )
@@ -830,6 +839,7 @@ class UpBlock1D(nn.Module):
         resnet_pre_norm: bool = True,
         output_scale_factor: float = 1.0,
         add_upsample: bool = True,
+        upsample_type: str = "conv",
     ):
         super().__init__()
         resnets = []
@@ -856,13 +866,24 @@ class UpBlock1D(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
         if add_upsample:
-            self.upsamplers = nn.ModuleList(
-                [
-                    Upsample1D(in_channels, 
-                               use_conv_transpose=True, 
-                    )
-                ]
-            )
+            if upsample_type == "conv":
+                use_conv_transpose = False
+                use_conv = True
+            elif upsample_type == "conv_transpose":
+                use_conv_transpose = True
+                use_conv = False
+            else:
+                raise ValueError(f"unknown upsample_type : {upsample_type} ")
+
+            if add_upsample:
+                self.upsamplers = nn.ModuleList(
+                    [
+                        Upsample1D(in_channels, 
+                                use_conv_transpose=use_conv_transpose,
+                                use_conv=use_conv, 
+                        )
+                    ]
+                )
         else:
             self.upsamplers = None
 
@@ -907,6 +928,7 @@ class UpDecoderBlock1D(nn.Module):
         resnet_pre_norm: bool = True,
         output_scale_factor: float = 1.0,
         add_upsample: bool = True,
+        upsample_type: str = "conv",
         temb_channels: Optional[int] = None, # needed?
     ):
         super().__init__()
@@ -933,13 +955,24 @@ class UpDecoderBlock1D(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
         if add_upsample:
-            self.upsamplers = nn.ModuleList(
-                [
-                    Upsample1D(in_channels, 
-                               use_conv_transpose=True, 
-                    )
-                ]
-            )
+            if upsample_type == "conv":
+                use_conv_transpose = False
+                use_conv = True
+            elif upsample_type == "conv_transpose":
+                use_conv_transpose = True
+                use_conv = False
+            else:
+                raise ValueError(f"unknown upsample_type : {upsample_type} ")
+
+            if add_upsample:
+                self.upsamplers = nn.ModuleList(
+                    [
+                        Upsample1D(in_channels, 
+                                use_conv_transpose=use_conv_transpose,
+                                use_conv=use_conv, 
+                        )
+                    ]
+                )
         else:
             self.upsamplers = None
 
@@ -975,6 +1008,7 @@ class AttnUpDecoderBlock1D(nn.Module):
         num_attention_heads: int = 8,
         output_scale_factor: float = 1.0,
         add_upsample: bool = True,
+        upsample_type: str = "conv",
         temb_channels: Optional[int] = None,
     ):
         super().__init__()
@@ -1011,13 +1045,24 @@ class AttnUpDecoderBlock1D(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
         if add_upsample:
-            self.upsamplers = nn.ModuleList(
-                [
-                    Upsample1D(in_channels, 
-                               use_conv_transpose=True, 
-                    )
-                ]
-            )
+            if upsample_type == "conv":
+                use_conv_transpose = False
+                use_conv = True
+            elif upsample_type == "conv_transpose":
+                use_conv_transpose = True
+                use_conv = False
+            else:
+                raise ValueError(f"unknown upsample_type : {upsample_type} ")
+
+            if add_upsample:
+                self.upsamplers = nn.ModuleList(
+                    [
+                        Upsample1D(in_channels, 
+                                use_conv_transpose=use_conv_transpose,
+                                use_conv=use_conv, 
+                        )
+                    ]
+                )
         else:
             self.upsamplers = None
 
@@ -1171,6 +1216,7 @@ def get_up_block(
             out_channels=out_channels,
             dropout=dropout,
             add_upsample=add_upsample,
+            upsample_type=upsample_type,
             resnet_eps=resnet_eps,
             resnet_act_fn=resnet_act_fn,
             resnet_groups=resnet_groups,
@@ -1184,6 +1230,7 @@ def get_up_block(
             out_channels=out_channels,
             dropout=dropout,
             add_upsample=add_upsample,
+            upsample_type=upsample_type,
             resnet_eps=resnet_eps,
             resnet_act_fn=resnet_act_fn,
             resnet_groups=resnet_groups,

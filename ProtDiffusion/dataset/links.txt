@@ -1,0 +1,8 @@
+UniRef100, non-fragment, present in UniProtKB. If using UniParc sequences, some might be fragments, as this is not recorded:
+https://www.uniprot.org/uniref?query=%28uniprot_id%3A*%29+NOT+%28name%3A%28fragment%29%29&sort=id&facets=identity%3A1.0
+
+Same, but for UniRef90
+https://www.uniprot.org/uniref?query=%28uniprot_id%3A*%29+NOT+%28name%3A%28fragment%29%29&sort=id&facets=identity%3A0.9
+
+Same, but for UniRef50:
+https://www.uniprot.org/uniref?query=%28uniprot_id%3A*%29+NOT+%28name%3A%28fragment%29%29&sort=id&facets=identity%3A0.5

@@ -147,7 +147,7 @@ class Encoder1D(nn.Module):
         act_fn: str = "silu",
         norm_type: str = "group",  # group, spatial
         double_z: bool = True,
-        mid_block_add_attention=True,
+        mid_block_add_attention: bool = True,
         num_attention_heads: int = 1,
         conv_in_kernel_size: int = 3,
     ):
@@ -274,7 +274,7 @@ class Decoder1D(nn.Module):
         norm_num_groups: int = 32,
         act_fn: str = "silu",
         norm_type: str = "group",  # group, spatial
-        mid_block_add_attention=True,
+        mid_block_add_attention: bool = True,
         num_attention_heads: int = 1,
         upsample_type: str = "conv",
         conv_out_kernel_size: int = 3,

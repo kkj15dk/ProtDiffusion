@@ -1,7 +1,7 @@
 # Datasets
 - Download Uniref100, 90, and 50
 - Add [BOP] and [EOP] to start and end, unless it is a fragment
-- Padding '-' charcter to length (8 or 64, depending on if i use DiT or U-Net)
+- Padding '-' character to length (8 or 64, depending on if i use DiT or U-Net)
 - Sort for very long sequences
 - Length as additional field
 
@@ -12,18 +12,27 @@
 # Models
 - VAE
     - Make it be deterministic in model.eval() (using mode for sampling posterior)
+    - sigma-VAE ??
 - U-Net
 - DiT
+ - FlowMatchDiscreteEulerScheduler
 
 # Layers
 - SelfAttention1d
     - head_dim
     - num_layers
+    - QK RMSNorm
+    - RoPE
 - AttenXBlock1d
     - num_attention_heads
+    - x-transformers ??
 
-# Sampling
-- Sampling with differnet lengths, resolution of 8/64 bp
+# Training
+- Be able to restart training
+- Easy test-case
+- Better visualisation
+ - of the model
+ - of confusion matrixes
 
 # Long term
 - Inpianting
@@ -31,3 +40,4 @@
 - VAE for downscaling proteins, then diffusion, then upscaling (like stable diffusion)
 - KAN vs MLP
 - GROKFAST
+- NF4 format for smaller size

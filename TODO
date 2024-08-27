@@ -11,7 +11,8 @@
 
 # Models
 - VAE
-    - Make it be deterministic in model.eval() (using mode for sampling posterior)
+    - Make it be deterministic in inference (using mode for sampling posterior)
+    - Still have it sample in model.eval(), to be able to calculate kl_loss
     - sigma-VAE ??
 - U-Net
 - DiT

@@ -634,7 +634,7 @@ class DownEncoderBlock1D(nn.Module):
             for downsampler in self.downsamplers:
                 hidden_states = downsampler(hidden_states)
             if attention_mask is not None:
-                attention_mask = F.max_pool1d(attention_mask, kernel_size=2, stride=2)
+                attention_mask = attention_mask[:, ::2]
 
         return hidden_states, attention_mask
 

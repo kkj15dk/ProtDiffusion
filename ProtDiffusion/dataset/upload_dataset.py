@@ -1,48 +1,45 @@
 from datasets import Dataset, DatasetDict
 import json
 from Bio import SeqIO
+from typing import Optional, Tuple
+import re
 
-def fasta_to_dataset(aa_file = "NRPSs_mid-1800.fa", label_file = 'labels.json', characters = "ACDEFGHIKLMNPQRSTVWY"):
-    label_dict = json.loads(open(label_file).read())
-    train_record_aa = [record for record in SeqIO.parse(aa_file, "fasta")]
-    samples = {"id": [], "sequence": [], "class": []}
-    for record in train_record_aa:
-        label = record.description.split('|')[-1]
-        id = record.description.split('|')[0]
-        if label in label_dict:
-            seq = str(record.seq)
-            if not set(seq).issubset(characters):
-                continue
-            cl = label_dict[label]['class']
-            samples["id"].append(id)
-            samples["sequence"].append(seq)
-            samples["class"].append(cl)
+def fasta_to_dataset(aa_file: str, characters = "ACDEFGHIKLMNOPQRSTUVWY") -> Dataset:
+    train_record_aa_generator = SeqIO.parse(aa_file, "fasta")
+    samples = {"id": [], "sequence": [], "TaxID": [], "RepID": []}
+    for record in train_record_aa_generator:
+        match = re.search(r'TaxID=(\d+)', record.description)
+        if match:
+            tax_id = match.group(1)
+        else:
+            tax_id = None
+        
+        match = re.search(r'RepID=([\w_]+)', record.description)
+        if match:
+            rep_id = match.group(1)
+        else:
+            print("RepID not found for record: " + record.id)
+            print("Description: " + record.description)
+            continue # skip this record if the tax id is not found
+        
+        seq = str(record.seq)
+        if not set(seq).issubset(characters):
+            print("Sequence contains characters not in the alphabet for " + record.id + " : " + seq)
+            print("Characters not in the alphabet: " + str(set(seq) - set(characters)))
+            continue # skip this record if it contains characters not in the alphabet
+
+        samples["id"].append(record.id)
+        samples["sequence"].append(seq)
+        samples["TaxID"].append(tax_id)
+        samples["RepID"].append(rep_id)
     print("There are " + str(len(samples['id'])) + " sequences in the dataset with correct labeling, using the amino acids in the alphabet.")
-    # Use a dictionary to remove duplicates and preserve order
-    unique_samples = {"id": [], "sequence": [], "class": []}
-    seen_ids = set()
-
-    for i, id in enumerate(samples["id"]):
-        if id not in seen_ids:
-            seen_ids.add(id)
-            unique_samples["id"].append(samples["id"][i])
-            unique_samples["sequence"].append(samples["sequence"][i])
-            unique_samples["class"].append(samples["class"][i])
-    samples = unique_samples
-    print("There are " + str(len(samples['id'])) + " sequences when removing duplicates. This is the final dataset.")
-    max_len = max([len(seq) for seq in samples["sequence"]])
-    min_len = min([len(seq) for seq in samples["sequence"]])
-    print("Max length sequence is: " + str(max_len))
-    print("Min length sequence is: " + str(min_len))
 
     # Create a dictionary to store the dataset
     dataset = Dataset.from_dict(samples)
     return dataset
 
 if __name__ == "__main__":
-    dataset_train = fasta_to_dataset(aa_file = 'testcase_train.fa', label_file = 'labels_test.json')
-    dataset_test = fasta_to_dataset(aa_file = 'testcase_test.fa', label_file = 'labels_test.json')
-    dataset_val = fasta_to_dataset(aa_file = 'testcase_val.fa', label_file = 'labels_test.json')
+    dataset = fasta_to_dataset(aa_file = 'UniRef50-processed.faa')
 
-    dataset_dict = DatasetDict({'train': dataset_train, 'test': dataset_test, 'val': dataset_val})
-    dataset_dict.push_to_hub('test_dataset')
+    dataset_dict = DatasetDict({'train': dataset})
+    dataset_dict.push_to_hub('UniRef90-preprocessed')

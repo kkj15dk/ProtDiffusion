@@ -6,6 +6,8 @@
 *.gz*
 *.fasta
 *.fa
+*.faa
+*.fna
 */datasets/*
 
 # cache files

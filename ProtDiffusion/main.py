@@ -171,7 +171,6 @@ class TrainingVariables:
     
     def load_state_dict(self, state_dict):
         self.__dict__.update(state_dict)
-training_variables = TrainingVariables()
 
 class VAETrainer:
     def __init__(self, 
@@ -182,12 +181,12 @@ class VAETrainer:
                  train_dataloader: DataLoader, 
                  val_dataloader: DataLoader, 
                  config: TrainingConfig, 
-                 training_variables: TrainingVariables = training_variables,
-                 test_dataloader: DataLoader = None
+                 test_dataloader: DataLoader = None,
+                 training_variables: Optional[TrainingVariables] = None,
         ):
         self.tokenizer = tokenizer
         self.config = config
-        self.training_variables = training_variables
+        self.training_variables = training_variables or TrainingVariables()
         self.accelerator_config = ProjectConfiguration(
             project_dir=self.config.output_dir,
             logging_dir=os.path.join(self.config.output_dir, "logs"),
@@ -354,7 +353,14 @@ class VAETrainer:
                         )
                     self.model.train() # Set model back to train mode
 
-Trainer = VAETrainer(model, tokenizer, optimizer, lr_scheduler, train_dataloader, val_dataloader, config, training_variables, test_dataloader)
+Trainer = VAETrainer(model, 
+                     tokenizer, 
+                     optimizer, 
+                     lr_scheduler, 
+                     train_dataloader, 
+                     val_dataloader, 
+                     config, 
+                     test_dataloader)
 
 # %%
 from accelerate import notebook_launcher

@@ -9,6 +9,7 @@
 *.faa
 *.fna
 */datasets/*
+dataset_*
 
 # cache files
 *__pycache__

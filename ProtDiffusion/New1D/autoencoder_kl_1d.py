@@ -162,7 +162,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         else:
             moments = h
 
-        posterior = DiagonalGaussianDistribution1D(moments)
+        posterior = DiagonalGaussianDistribution1D(moments, deterministic=False)
 
         return EncoderKLOutput1D(latent_dist=posterior, attention_masks=attention_masks)
 
@@ -203,11 +203,28 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
         return DecoderOutput(sample=decoded)
 
+    def loss_fn(
+        self,
+        output: AutoencoderKLOutput1D, 
+        input_ids: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        ce_loss = nn.functional.cross_entropy(output.sample, input_ids, reduction='none')
+        ce_loss = torch.sum(
+            ce_loss * output.attention_masks[0]
+        ) / output.attention_masks[0].sum()
+        
+        kl_loss = output.latent_dist.kl()
+        kl_loss = torch.sum(
+            kl_loss * output.attention_masks[-1]
+        ) / output.attention_masks[-1].sum()
+
+        return ce_loss, kl_loss
+
     def forward(
         self,
         sample: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        sample_posterior: bool = False, # Should be True when training
+        sample_posterior: bool = True, # Should be False for inference
         return_dict: bool = True,
         generator: Optional[torch.Generator] = None,
     ) -> Union[AutoencoderKLOutput1D, torch.Tensor]:

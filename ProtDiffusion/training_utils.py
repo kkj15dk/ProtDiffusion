@@ -1,24 +1,65 @@
 # %%
-from dataclasses import dataclass
-import os
-from typing import Optional, Literal, Union, List, Tuple
-import random
-import pickle
-
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import LRScheduler
+
+from diffusers.optimization import get_cosine_schedule_with_warmup
+
+import os
+import pickle
+import numpy as np
+
+from dataclasses import dataclass
+from typing import Optional, Literal, Union, List
 
 from transformers import PreTrainedTokenizerFast
-from datasets import load_from_disk, load_dataset
+from datasets import load_dataset, load_from_disk
+import random
+
+from accelerate import Accelerator
+from accelerate.utils import ProjectConfiguration
+
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+
+from grokfast import gradfilter_ema
+from tqdm.auto import tqdm
+
+from New1D.autoencoder_kl_1d import AutoencoderKL1D
+
+# Set a random seed in a bunch of different places
+def set_seed(seed: int = 42) -> None:
+    """
+    Set the random seed for reproducibility.
+
+    Args:
+        seed (int): The random seed to set.
+
+    Returns:
+        None
+    """
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # When running on the CuDNN backend, two further options must be set
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    print(f"Random seed set as {seed}")
 
 @dataclass
 class TrainingConfig:
-    batch_size: int = 2  # the batch size
+    batch_size: int = 64  # the batch size
     mega_batch: int = 1000 # how many batches to use for batchsampling
     num_epochs: int = 1  # the number of epochs to train the model
     gradient_accumulation_steps: int = 2  # the number of steps to accumulate gradients before taking an optimizer step
     learning_rate: float = 1e-4  # the learning rate
     lr_warmup_steps:int  = 1000
-    save_image_model_steps:int  = 100
+    save_image_model_steps:int  = 1000
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
     optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`
     SGDmomentum: float = 0.9
@@ -47,9 +88,11 @@ class TrainingConfig:
     grokfast_lamb: float = 2.0 #Amplifying factor hyperparameter of the filter.
 
 
-def prepare_dataset(dataset, 
+def prepare_dataset(config: TrainingConfig,
+                    dataset, 
                     dataset_split: str,
                     dataset_dir: str,
+                    tokenizer: PreTrainedTokenizerFast,
                     sequence_key: str = 'sequence',
 ):
     '''
@@ -69,7 +112,17 @@ def prepare_dataset(dataset,
         with open(lengths_path, 'wb') as f:
             pickle.dump(lengths, f)
 
-    return dataset, lengths
+    sampler = BatchSampler(lengths,
+                           config.batch_size,
+                           config.mega_batch,
+                           tokenizer=tokenizer,
+                           max_lenght=config.max_len,
+                           drop_last=False)
+    dataloader = DataLoader(dataset,
+                            batch_sampler=sampler, 
+                            collate_fn=sampler.collate_fn)
+
+    return dataloader
 
 def random_slice(encoded_batch, max_length): # This seems inefficient, but I don't know how to do it better, as the current tokenizer doesn't support RANDOM truncation
     batch_size, seq_length = encoded_batch['input_ids'].shape
@@ -153,3 +206,211 @@ class BatchSampler:
             return len(self.lengths) // self.batch_size
         else:
             return (len(self.lengths) + self.batch_size - 1) // self.batch_size
+
+@dataclass
+class TrainingVariables:
+    global_step: int = 0
+    val_loss: float = float("inf")
+    grads: Optional[torch.Tensor] = None
+
+    def state_dict(self):
+        return self.__dict__
+    
+    def load_state_dict(self, state_dict):
+        self.__dict__.update(state_dict)
+
+class VAETrainer:
+    def __init__(self, 
+                 model: AutoencoderKL1D, 
+                 tokenizer: PreTrainedTokenizerFast, 
+                 train_dataloader: DataLoader, 
+                 val_dataloader: DataLoader, 
+                 config: TrainingConfig, 
+                 test_dataloader: DataLoader = None,
+                 training_variables: Optional[TrainingVariables] = None,
+        ):
+        self.tokenizer = tokenizer
+        self.config = config
+        self.training_variables = training_variables or TrainingVariables()
+        self.accelerator_config = ProjectConfiguration(
+            project_dir=self.config.output_dir,
+            logging_dir=os.path.join(self.config.output_dir, "logs"),
+            automatic_checkpoint_naming=self.config.automatic_checkpoint_naming,
+            total_limit=self.config.total_limit, # Limit the total number of checkpoints to 1
+        )
+        self.accelerator = Accelerator(
+            project_config=self.accelerator_config,
+            mixed_precision=self.config.mixed_precision,
+            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
+            log_with="tensorboard",
+        )
+
+        if config.optimizer == "Adam":
+            optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        elif config.optimizer == "AdamW":
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        elif config.optimizer == "Adamax":
+            optimizer = torch.optim.Adamax(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        elif config.optimizer == "SGD":
+            optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, momentum=config.SGDmomentum)
+        else:
+            raise ValueError("Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`")
+
+        lr_scheduler = get_cosine_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=config.lr_warmup_steps,
+            num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+        )
+        # Prepare everything
+        # There is no specific order to remember, you just need to unpack the
+        # objects in the same order you gave them to the prepare method.
+        self.model, self.optimizer, self.train_dataloader, self.test_dataloader, self.val_dataloader, self.lr_scheduler = self.accelerator.prepare(
+            model, optimizer, train_dataloader, test_dataloader, val_dataloader, lr_scheduler
+        )
+        self.accelerator.register_for_checkpointing(self.training_variables)
+
+    def logits_to_token_ids(self, logits):
+        '''
+        Convert a batch of logits to token_ids.
+        Returns token_ids
+        '''
+        if self.config.cutoff is None:
+            token_ids = logits.argmax(dim=1)
+        else:
+            token_ids = torch.where(logits.max(dim=1).values > self.config.cutoff, 
+                                    logits.argmax(dim=1), 
+                                    torch.tensor([self.tokenizer.unknown_token_id])
+                                    )
+        return token_ids
+
+    @torch.no_grad()
+    def evaluate(self
+    ) -> dict:
+
+        test_dir = os.path.join(self.config.output_dir, "samples")
+        os.makedirs(test_dir, exist_ok=True)
+
+        running_loss = 0.0
+        num_correct_residues = 0
+        total_residues = 0
+        name = f"step_{self.training_variables.global_step//1000:04d}k"
+
+        progress_bar = tqdm(total=len(self.val_dataloader), disable=not self.accelerator.is_local_main_process)
+        progress_bar.set_description(f"Evaluating {name}")
+
+        for i, sample in enumerate(self.val_dataloader):
+
+            output = self.model(sample = sample['input_ids'],
+                                attention_mask = sample['attention_mask'],
+                                sample_posterior = True, # Should be set to False in inference
+            )
+
+            ce_loss, kl_loss = self.model.loss_fn(output, sample['input_ids'])
+            loss = ce_loss + kl_loss * self.config.kl_weight
+            running_loss += loss.item()
+
+            token_ids_pred = self.logits_to_token_ids(output.sample)
+
+            token_ids_correct = ((sample['input_ids'] == token_ids_pred) & (sample['attention_mask'] == 1)).long()
+            num_residues = torch.sum(sample['attention_mask'], dim=1).long()
+
+            num_correct_residues += token_ids_correct.sum().item()
+            total_residues += num_residues.sum().item()
+
+            # Decode the predicted sequences, and remove zero padding
+            seqs_pred = self.tokenizer.batch_decode(token_ids_pred, skip_special_tokens=self.config.skip_special_tokens)
+            seqs_lens = torch.sum(sample['attention_mask'], dim=1).long()
+            seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
+
+            # Save all samples as a FASTA file
+            seq_record_list = [SeqRecord(Seq(seq), id=str(sample['id'][i]), 
+                            description=
+                            f"classlabel: {sample['class_label'][i].item()} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.2f}")
+                            for i, seq in enumerate(seqs_pred)]
+            with open(f"{test_dir}/{name}.fa", "a") as f:
+                SeqIO.write(seq_record_list, f, "fasta")
+            
+            progress_bar.update(1)
+        
+        acc = num_correct_residues / total_residues
+        print(f"{name}, val_loss: {running_loss / len(self.val_dataloader):.4f}, val_accuracy: {acc:.4f}")
+        logs = {"val_loss": loss.detach().item(), 
+                "val_ce_loss": ce_loss.detach().item(), 
+                "val_kl_loss": kl_loss.detach().item(),
+                "val_acc": acc,
+                }
+        return logs
+    
+    def train_loop(self, from_checkpoint: Optional[int] = None):
+  
+        # start the loop
+        if self.accelerator.is_main_process:
+            os.makedirs(self.config.output_dir, exist_ok=True)
+            os.makedirs(self.accelerator_config.logging_dir, exist_ok=True)
+            if self.config.push_to_hub:
+                raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
+            
+            if from_checkpoint is not None:
+                input_dir = os.path.join(self.config.output_dir, "checkpoints", f'checkpoint_{from_checkpoint}')
+                self.accelerator.load_state(input_dir=input_dir)
+                print(f"Loaded checkpoint from {input_dir}")
+                print(f"Starting from step {self.training_variables.global_step}")
+                print(f"Validation loss: {self.training_variables.val_loss}")
+            else:
+                self.training_variables.global_step = 0
+                self.training_variables.val_loss = float("inf")
+                self.training_variables.grads = None # Initialize the grads for the grokfast algorithm
+
+        # Now you train the model
+        self.model.train()
+        for epoch in range(self.config.num_epochs):
+            progress_bar = tqdm(total=len(self.train_dataloader), disable=not self.accelerator.is_local_main_process)
+            progress_bar.set_description(f"Epoch {epoch}")
+
+            for step, batch in enumerate(self.train_dataloader):
+
+                with self.accelerator.accumulate(self.model):
+                    input = batch['input_ids']
+                    attention_mask = batch['attention_mask']
+                    # Predict the noise residual
+                    output = self.model(sample = input,
+                                    attention_mask = attention_mask,
+                                    sample_posterior = True, # Should be set to true in training
+                    )
+                    
+                    ce_loss, kl_loss = self.model.loss_fn(output, input)
+                    loss = ce_loss + kl_loss * self.config.kl_weight
+                    self.accelerator.backward(loss)
+
+                    if self.config.grokfast:
+                        self.training_variables.grads = gradfilter_ema(self.model, grads=self.training_variables.grads, alpha=self.config.grokfast_alpha, lamb=self.config.grokfast_lamb) 
+
+                    self.optimizer.step()
+                    self.lr_scheduler.step()
+                    self.optimizer.zero_grad()
+
+                progress_bar.update(1)
+                logs = {"train_loss": loss.detach().item(), 
+                        "train_ce_loss": ce_loss.detach().item(), 
+                        "train_kl_loss": kl_loss.detach().item(), 
+                        "lr": self.lr_scheduler.get_last_lr()[0], 
+                        "step": self.training_variables.global_step,
+                }
+                progress_bar.set_postfix(**logs)
+                self.accelerator.log(logs, step=self.training_variables.global_step)
+                self.training_variables.global_step += 1
+
+                if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
+                    self.accelerator.wait_for_everyone()
+                    self.model.eval() # Set model to eval mode to generate images
+                    logs = self.evaluate()
+                    self.accelerator.log(logs, step=self.training_variables.global_step)
+
+                    new_val_loss = logs["val_loss"]
+
+                    if new_val_loss < self.training_variables.val_loss: # Save the model if the validation loss is lower
+                        self.training_variables.val_loss = new_val_loss
+                        self.accelerator.save_state(
+                            output_dir=self.config.output_dir,
+                        )
+                    self.model.train() # Set model back to train mode

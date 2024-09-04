@@ -31,7 +31,7 @@
 # Training
 - [x] Be able to restart training 
     - (somewhat implemented, however, training does not start from the same point in the dataloader, and will be different, even if the seed is the same)
-- []Easy test-case
+- [ ] Easy test-case
 - Better visualisation
  - of the model (architecture, tensorboard can do this?)
  - of confusion matrixes

@@ -11,7 +11,7 @@ set_seed(42) # Set the random seed for reproducibility
 config = TrainingConfig(
     num_epochs=2,  # the number of epochs to train for
     batch_size=16,
-    save_image_model_steps=10,
+    save_image_model_steps=10000,
 )
 
 config.dataset_name = "kkj15dk/test_dataset"
@@ -63,12 +63,9 @@ Trainer = VAETrainer(model,
 
 
 # %%
-
-print('First', next(iter(train_dataloader))['input_ids'])
 Trainer.train_loop()
-print('Last', next(iter(train_dataloader))['input_ids'])
 
 # %%
-Trainer.train_loop(from_checkpoint=2)
+Trainer.train_loop(from_checkpoint=1)
 
-
+# %%

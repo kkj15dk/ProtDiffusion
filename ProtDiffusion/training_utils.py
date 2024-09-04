@@ -368,7 +368,15 @@ class VAETrainer:
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(self.train_dataloader):
+                if epoch == 0 and step == 0:
+                    print('First', batch['input_ids'][0])
+                
+                print(f"Global Step: {self.training_variables.global_step}")
+                print(f"Total Steps: {len(self.train_dataloader) * self.config.num_epochs - 1}")
 
+                if self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs - 1:
+                    print('Last', batch['input_ids'][0])
+                
                 with self.accelerator.accumulate(self.model):
                     input = batch['input_ids']
                     attention_mask = batch['attention_mask']
@@ -400,7 +408,7 @@ class VAETrainer:
                 self.accelerator.log(logs, step=self.training_variables.global_step)
                 self.training_variables.global_step += 1
 
-                if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
+                if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs - 1:
                     self.accelerator.wait_for_everyone()
                     self.model.eval() # Set model to eval mode to generate images
                     logs = self.evaluate()

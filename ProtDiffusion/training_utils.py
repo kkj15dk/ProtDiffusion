@@ -8,6 +8,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
 
 import os
+import shutil
 import pickle
 import numpy as np
 
@@ -63,9 +64,9 @@ class TrainingConfig:
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
     optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`
     SGDmomentum: float = 0.9
-    output_dir: str = os.path.join("output","protein-VAE-UniRef50-8")  # the model name locally and on the HF Hub
+    output_dir: str = os.path.join("output","test")  # the model name locally and on the HF Hub
     pad_to_multiple_of: int = 16
-    max_len: int = 32  # truncation of the input sequence
+    max_len: int = 512  # truncation of the input sequence
 
     class_embeddings_concat = False  # whether to concatenate the class embeddings to the time embeddings
 
@@ -76,7 +77,7 @@ class TrainingConfig:
     seed: int = 42
 
     automatic_checkpoint_naming: bool = True  # whether to automatically name the checkpoints
-    total_limit: int = 1  # the total limit of checkpoints to save
+    total_checkpoints_limit: int = 5  # the total limit of checkpoints to save
 
     cutoff: Optional[float] = None # cutoff for when to predict the token given the logits, and when to assign the unknown token 'X' to this position
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
@@ -209,6 +210,7 @@ class BatchSampler:
 
 @dataclass
 class TrainingVariables:
+    Epoch: int = 0
     global_step: int = 0
     val_loss: float = float("inf")
     grads: Optional[torch.Tensor] = None
@@ -236,7 +238,7 @@ class VAETrainer:
             project_dir=self.config.output_dir,
             logging_dir=os.path.join(self.config.output_dir, "logs"),
             automatic_checkpoint_naming=self.config.automatic_checkpoint_naming,
-            total_limit=self.config.total_limit, # Limit the total number of checkpoints to 1
+            total_limit=self.config.total_checkpoints_limit, # Limit the total number of checkpoints
         )
         self.accelerator = Accelerator(
             project_config=self.accelerator_config,
@@ -269,7 +271,7 @@ class VAETrainer:
         )
         self.accelerator.register_for_checkpointing(self.training_variables)
 
-    def logits_to_token_ids(self, logits):
+    def logits_to_token_ids(self, logits: torch.Tensor) -> torch.Tensor:
         '''
         Convert a batch of logits to token_ids.
         Returns token_ids
@@ -341,41 +343,57 @@ class VAETrainer:
                 }
         return logs
     
-    def train_loop(self, from_checkpoint: Optional[int] = None):
+    def train_loop(self, from_checkpoint: Optional[Union[str, os.PathLike]] = None):
   
         # start the loop
         if self.accelerator.is_main_process:
-            os.makedirs(self.config.output_dir, exist_ok=True)
-            os.makedirs(self.accelerator_config.logging_dir, exist_ok=True)
+            # Create the output directory
+            if not os.path.exists(self.config.output_dir):
+                os.makedirs(self.config.output_dir, exist_ok=True)
+            elif not self.config.overwrite_output_dir:
+                raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
+            else:
+                raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
+                
             if self.config.push_to_hub:
                 raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
             
-            if from_checkpoint is not None:
-                input_dir = os.path.join(self.config.output_dir, "checkpoints", f'checkpoint_{from_checkpoint}')
-                self.accelerator.load_state(input_dir=input_dir)
-                print(f"Loaded checkpoint from {input_dir}")
-                print(f"Starting from step {self.training_variables.global_step}")
-                print(f"Validation loss: {self.training_variables.val_loss}")
-            else:
+            # Start the logging
+            self.accelerator.init_trackers(
+                project_name=self.accelerator_config.logging_dir,
+                config=vars(self.config),
+            )
+
+            # load the checkpoint if it exists
+            if from_checkpoint is None:
+                skipped_dataloader = self.train_dataloader
+                starting_epoch = 0
                 self.training_variables.global_step = 0
                 self.training_variables.val_loss = float("inf")
                 self.training_variables.grads = None # Initialize the grads for the grokfast algorithm
+            else:
+                self.accelerator.load_state(input_dir=from_checkpoint)
+                # Skip the first batches
+                starting_epoch = self.training_variables.global_step // len(self.train_dataloader)
+                batches_to_skip = self.training_variables.global_step % len(self.train_dataloader)
+                skipped_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, batches_to_skip)
+                print(f"Loaded checkpoint from {from_checkpoint}")
+                print(f"Starting from step {self.training_variables.global_step}")
+                print(f"Validation loss: {self.training_variables.val_loss}")
 
         # Now you train the model
         self.model.train()
-        for epoch in range(self.config.num_epochs):
-            progress_bar = tqdm(total=len(self.train_dataloader), disable=not self.accelerator.is_local_main_process)
+        for epoch in range(starting_epoch, self.config.num_epochs):
+
+            if epoch == starting_epoch:
+                dataloader = skipped_dataloader
+            else:
+                dataloader = self.train_dataloader
+
+            progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
-            for step, batch in enumerate(self.train_dataloader):
-                if epoch == 0 and step == 0:
-                    print('First', batch['input_ids'][0])
-                
-                print(f"Global Step: {self.training_variables.global_step}")
-                print(f"Total Steps: {len(self.train_dataloader) * self.config.num_epochs - 1}")
-
-                if self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs - 1:
-                    print('Last', batch['input_ids'][0])
+            for step, batch in enumerate(dataloader):
                 
                 with self.accelerator.accumulate(self.model):
                     input = batch['input_ids']

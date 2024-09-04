@@ -6,12 +6,17 @@ from datasets import load_dataset
 
 from New1D.autoencoder_kl_1d import AutoencoderKL1D
 
+import os
 
 set_seed(42) # Set the random seed for reproducibility
+
 config = TrainingConfig(
-    num_epochs=2,  # the number of epochs to train for
+    num_epochs=500,  # the number of epochs to train for
     batch_size=16,
-    save_image_model_steps=10000,
+    save_image_model_steps=1000,
+    output_dir=os.path.join("output","protein-VAE-UniRef50-8-rerun"),  # the model name locally and on the HF Hub
+    total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
+    max_len=32,
 )
 
 config.dataset_name = "kkj15dk/test_dataset"
@@ -61,11 +66,8 @@ Trainer = VAETrainer(model,
                      config, 
                      test_dataloader)
 
-
 # %%
 Trainer.train_loop()
 
 # %%
-Trainer.train_loop(from_checkpoint=1)
-
-# %%
+Trainer.train_loop(from_checkpoint="output/protein-VAE-UniRef50-8/checkpoints/checkpoint_4")

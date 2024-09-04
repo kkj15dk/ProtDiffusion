@@ -17,3 +17,4 @@ dataset_*
 # output files
 */protein-VAE*
 output
+output.csv

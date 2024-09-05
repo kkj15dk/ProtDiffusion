@@ -2,6 +2,8 @@ import requests
 import time
 import concurrent.futures
 import logging
+import json
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -47,8 +49,13 @@ WHERE {{
 LIMIT {limit} OFFSET {offset}
 """
 
+# Function to read configuration file
+def read_config(config_file="config.json"):
+    with open(config_file, "r") as f:
+        return json.load(f)
+
 # Function to execute the SPARQL query with retries
-def execute_query(query, retries=3, delay=5, offset=0):
+def execute_query(query, delay=5, offset=0, timeout=3600):
     headers = {
         "Accept": "text/csv",
         "User-Agent": "s204514@dtu.dk"
@@ -57,60 +64,66 @@ def execute_query(query, retries=3, delay=5, offset=0):
     while True:
         attempt += 1
         try:
-            response = requests.get(endpoint, params={"query": query}, headers=headers, timeout=1200) # Increase timeout if needed, right now it is 20 minutes
+            response = requests.get(endpoint, params={"query": query}, headers=headers, timeout=timeout)
             response.raise_for_status()
             logging.info(f"Query successful for offset {offset}")
             return response.text
         except requests.exceptions.RequestException as e:
             logging.error(f"Attempt {attempt} failed for offset {offset}: {e}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-            else:
-                logging.error(f"Max retries reached for offset {offset}. Exiting.")
-                return None
+            time.sleep(delay)
 
 # Function to fetch data for a specific offset
-def fetch_data(offset, limit):
+def fetch_data(offset, limit, timeout):
     query = query_template.format(limit=limit, offset=offset)
-    return execute_query(query, offset=offset)
+    return execute_query(query, offset=offset, timeout=timeout)
 
-# Pagination parameters
-limit = 100000  # Adjust this value based on performance observations
+# Initial read of configuration
+config = read_config()
+limit = config["limit"]
+max_workers = config["max_workers"]
+timeout = config["timeout"]
+
+
+# Initialize offset
 offset = 0
-max_workers = 10  # Number of parallel workers
 
 # Open a file to write the results
 with open("output.csv", "w") as f:
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
         while True:
+            futures = []
             # Submit tasks to fetch data in parallel
+            config = read_config()
+            if config["limit"] != limit or config["max_workers"] != max_workers or config["timeout"] != timeout:
+                limit = config["limit"]
+                max_workers = config["max_workers"]
+                timeout = config["timeout"]
+                logging.info(f"Updated configuration: limit={limit}, max_workers={max_workers}, timeout={timeout}")
             for i in range(max_workers):
                 current_offset = offset + i * limit
                 logging.info(f"Submitting query for offset {current_offset}")
-                futures.append(executor.submit(fetch_data, current_offset, limit))
+                futures.append(executor.submit(fetch_data, current_offset, limit, timeout))
                 time.sleep(1)  # Add a delay to avoid overloading the server
             
+            all_results_empty = True
             # Process the results as they complete
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
                 if result is None:
-                    break
+                    continue
                 
+                all_results_empty = False
                 # Write the result to the file
                 if offset == 0:
                     f.write(result)  # Write header for the first chunk
                 else:
                     f.write(result.split("\n", 1)[1])  # Skip header for subsequent chunks
                 
-                # Update offset for the next chunk
-                offset += limit
-            
-            # Clear the futures list for the next batch
-            futures.clear()
-            
-            # Check if we have fetched all data
-            if len(result.splitlines()) <= 1:
+            # Update offset for the next chunk
+            offset += max_workers * limit
+        
+            # Break the loop if all results are empty
+            if all_results_empty:
                 break
 
 logging.info("Data download complete.")

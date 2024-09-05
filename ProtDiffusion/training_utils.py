@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader, Sampler
 
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from datasets import Dataset
+from collections import defaultdict
+from datasets import Dataset
 
 import os
 import pickle
@@ -86,27 +88,37 @@ class TrainingConfig:
     grokfast_alpha: float = 0.98 #Momentum hyperparmeter of the EMA.
     grokfast_lamb: float = 2.0 #Amplifying factor hyperparameter of the filter.
 
-def encode(example, sequence_key: str, pad_to_multiple_of: int, tokenizer: PreTrainedTokenizerFast):
+def encode(example, sequence_key: str, id_key: str, label_key: str, pad_to_multiple_of: int, tokenizer: PreTrainedTokenizerFast):
     output = tokenizer(example[sequence_key],
                         padding = True,
                         pad_to_multiple_of = pad_to_multiple_of,
                         return_token_type_ids=False,
                         return_attention_mask=False, # We need to attend to padding tokens, so we set this to False
                         )
-    output['id'] = example['id']
-    output['label'] = example['label']
+    output['id'] = example[id_key] or None
+    label = example[label_key] or None
+    if label is not None:
+        if label == 2:
+            output['label'] = 1
+        elif label == 2759:
+            output['label'] = 0
+        else:
+            output['label'] = None
     output['length'] = len(output['input_ids'])
     return output
 
-def group_data(dataset: Dataset):
+def group_data(dataset: Dataset) -> defaultdict:
     print("Grouping data")
-    dataset_dict = {}
-    for example in dataset:
+    dataset_dict = defaultdict(lambda: {'label': None, 'input_ids': [], 'lengths': []})
+    tqdm_dataset = tqdm(dataset, desc="Grouping data")
+    
+    for example in tqdm_dataset:
         id = example['id']
-        if id not in dataset_dict:
-            dataset_dict[id] = {'label': example['label'], 'input_ids': [], 'lengths': []}
+        if dataset_dict[id]['label'] is None:
+            dataset_dict[id]['label'] = example['label']
         dataset_dict[id]['input_ids'].append(example['input_ids'])
         dataset_dict[id]['lengths'].append(example['length'])
+    
     print(f"Grouped data into {len(dataset_dict)} sequences")
     return dataset_dict
 
@@ -116,40 +128,50 @@ def prepare_dataset(config: TrainingConfig,
                     dataset: Optional[Dataset] = None, 
                     input_ids_key: str = 'input_ids',
 ):
-    assert config.max_len / config.pad_to_multiple_of == 0, "max_len must be a multiple of pad_to_multiple_of"
+    assert config.max_len % config.pad_to_multiple_of == 0, "max_len must be a multiple of pad_to_multiple_of"
 
     if not os.path.exists(dataset_path):
         if dataset is None:
             raise ValueError("Dataset not found, please provide a dataset, or a valid path to one.")
-        os.makedirs(dataset_path, exist_ok=True)
 
         print(f"Encoding dataset to {dataset_path}")
         dataset = dataset.map(encode, 
                             fn_kwargs={'sequence_key': 'sequence', 
+                                        'id_key': 'clusterid',
+                                        'label_key': 'familytaxonid',
                                         'pad_to_multiple_of': config.pad_to_multiple_of, 
                                         'tokenizer': tokenizer},
                                         batched=False,
                                         remove_columns=['sequence'])
-        dataset = group_data(dataset)
+        grouped_dataset_dict = group_data(dataset)
+        dataset = Dataset.from_dict(grouped_dataset_dict)
         dataset.save_to_disk(f"{dataset_path}")
     else:
         dataset = Dataset.load_from_disk(f"{dataset_path}")
 
-    dataset = ClusteredDataset(dataset)
+    dataset = ClusteredDataset(dataset, input_ids_key=input_ids_key)
 
+    return dataset
+
+def prepare_dataloader(config: TrainingConfig,
+                        dataset: Dataset,
+                        tokenizer: PreTrainedTokenizerFast,
+                        input_ids_key: str = 'input_ids',
+                        drop_last: bool = False,
+                        ) -> DataLoader:
+    
     sampler = BatchSampler(dataset,
-                           config.batch_size,
-                           config.mega_batch,
-                           tokenizer=tokenizer,
-                           max_lenght=config.max_len,
-                           pad_to_multiple_of=config.pad_to_multiple_of,
-                           input_ids_key=input_ids_key,
-                           drop_last=False)
+                            config.batch_size,
+                            config.mega_batch,
+                            tokenizer=tokenizer,
+                            max_length=config.max_len,
+                            pad_to_multiple_of=config.pad_to_multiple_of,
+                            input_ids_key=input_ids_key,
+                            drop_last=drop_last)
     
     dataloader = DataLoader(dataset,
                             batch_sampler=sampler, 
                             collate_fn=sampler.collate_fn)
-
     return dataloader
 
 def random_slice(input_ids: torch.Tensor, attention_mask: torch.Tensor, max_length: int): # This seems inefficient, but I don't know how to do it better, as the current tokenizer doesn't support RANDOM truncation

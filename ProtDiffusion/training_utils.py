@@ -7,14 +7,13 @@ from torch.utils.data import DataLoader, Sampler
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from datasets import Dataset
 from collections import defaultdict
-from datasets import Dataset
 
 import os
 import pickle
 import numpy as np
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional, Union, List
 
 from transformers import PreTrainedTokenizerFast
 import random
@@ -27,7 +26,8 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from grokfast import gradfilter_ema
-from tqdm.auto import tqdm
+from tqdm import tqdm
+import json
 
 from New1D.autoencoder_kl_1d import AutoencoderKL1D
 
@@ -91,10 +91,11 @@ class TrainingConfig:
 def encode(example, sequence_key: str, id_key: str, label_key: str, pad_to_multiple_of: int, tokenizer: PreTrainedTokenizerFast):
     output = tokenizer(example[sequence_key],
                         padding = True,
+                        truncation=False, # We need to truncate the sequences later, so we set this to False
                         pad_to_multiple_of = pad_to_multiple_of,
                         return_token_type_ids=False,
                         return_attention_mask=False, # We need to attend to padding tokens, so we set this to False
-                        )
+    )
     output['id'] = example[id_key] or None
     label = example[label_key] or None
     if label is not None:
@@ -107,26 +108,73 @@ def encode(example, sequence_key: str, id_key: str, label_key: str, pad_to_multi
     output['length'] = len(output['input_ids'])
     return output
 
-def group_data(dataset: Dataset) -> defaultdict:
-    print("Grouping data")
+def group_data(dataset: Dataset, chunk_size: int = 10000, output_dir: str = "grouped_data") -> Dataset:
+    print("Grouping data with low memory requirements")
+    
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
     dataset_dict = defaultdict(lambda: {'label': None, 'input_ids': [], 'lengths': []})
-    tqdm_dataset = tqdm(dataset, desc="Grouping data")
+    chunk_index = 0
     
-    for example in tqdm_dataset:
-        id = example['id']
-        if dataset_dict[id]['label'] is None:
-            dataset_dict[id]['label'] = example['label']
-        dataset_dict[id]['input_ids'].append(example['input_ids'])
-        dataset_dict[id]['lengths'].append(example['length'])
+    # Process the dataset in chunks
+    for i in tqdm(range(0, len(dataset), chunk_size), desc="Processing chunks"):
+        chunk = dataset[i:i + chunk_size]
+        
+        for example in chunk:
+            id = example['id']
+            if dataset_dict[id]['label'] is None:
+                dataset_dict[id]['label'] = example['label']
+            dataset_dict[id]['input_ids'].append(example['input_ids'])
+            dataset_dict[id]['lengths'].append(example['length'])
+        
+        # Write the chunk to disk
+        chunk_file = os.path.join(output_dir, f"chunk_{chunk_index}.json")
+        with open(chunk_file, 'w') as f:
+            json.dump(dataset_dict, f)
+        
+        # Clear the dictionary for the next chunk
+        dataset_dict.clear()
+        chunk_index += 1
     
-    print(f"Grouped data into {len(dataset_dict)} sequences")
-    return dataset_dict
+    print(f"Processed {chunk_index} chunks")
+    
+    # Combine the intermediate results
+    combined_dict = defaultdict(lambda: {'label': None, 'input_ids': [], 'lengths': []})
+    
+    for chunk_file in tqdm(os.listdir(output_dir), desc="Combining chunks"):
+        chunk_path = os.path.join(output_dir, chunk_file)
+        with open(chunk_path, 'r') as f:
+            chunk_data = json.load(f)
+            for id, data in chunk_data.items():
+                if combined_dict[id]['label'] is None:
+                    combined_dict[id]['label'] = data['label']
+                combined_dict[id]['input_ids'].extend(data['input_ids'])
+                combined_dict[id]['lengths'].extend(data['lengths'])
+    
+    print(f"Grouped data into {len(combined_dict)} clusters based on the identifier")
+    
+    # Create a generator function
+    def data_generator():
+        for id, data in tqdm(combined_dict.items(), desc="Creating grouped dataset"):
+            yield {
+                'id': id,
+                'label': data['label'],
+                'input_ids': data['input_ids'],
+                'lengths': data['lengths']
+            }
+    
+    grouped_dataset = Dataset.from_generator(data_generator)
+    return grouped_dataset
+
 
 def prepare_dataset(config: TrainingConfig,
                     dataset_path: str,
                     tokenizer: PreTrainedTokenizerFast,
                     dataset: Optional[Dataset] = None, 
-                    input_ids_key: str = 'input_ids',
+                    sequence_key: str = 'sequence',
+                    id_key: str = 'clusterid',
+                    label_key: str = 'familytaxonid',
 ):
     assert config.max_len % config.pad_to_multiple_of == 0, "max_len must be a multiple of pad_to_multiple_of"
 
@@ -136,22 +184,19 @@ def prepare_dataset(config: TrainingConfig,
 
         print(f"Encoding dataset to {dataset_path}")
         dataset = dataset.map(encode, 
-                            fn_kwargs={'sequence_key': 'sequence', 
-                                        'id_key': 'clusterid',
-                                        'label_key': 'familytaxonid',
+                            fn_kwargs={'sequence_key': sequence_key, 
+                                        'id_key': id_key,
+                                        'label_key': label_key,
                                         'pad_to_multiple_of': config.pad_to_multiple_of, 
                                         'tokenizer': tokenizer},
                                         batched=False,
-                                        remove_columns=['sequence'])
-        grouped_dataset_dict = group_data(dataset)
-        dataset = Dataset.from_dict(grouped_dataset_dict)
-        dataset.save_to_disk(f"{dataset_path}")
+                                        remove_columns=[sequence_key])
+        grouped_dataset = group_data(dataset)
+        grouped_dataset.save_to_disk(f"{dataset_path}")
     else:
-        dataset = Dataset.load_from_disk(f"{dataset_path}")
+        grouped_dataset = Dataset.load_from_disk(f"{dataset_path}")
 
-    dataset = ClusteredDataset(dataset, input_ids_key=input_ids_key)
-
-    return dataset
+    return grouped_dataset
 
 def prepare_dataloader(config: TrainingConfig,
                         dataset: Dataset,
@@ -160,7 +205,9 @@ def prepare_dataloader(config: TrainingConfig,
                         drop_last: bool = False,
                         ) -> DataLoader:
     
-    sampler = BatchSampler(dataset,
+    clustered_dataset = ClusteredDataset(dataset, input_ids_key=input_ids_key)
+
+    sampler = BatchSampler(clustered_dataset,
                             config.batch_size,
                             config.mega_batch,
                             tokenizer=tokenizer,
@@ -169,43 +216,41 @@ def prepare_dataloader(config: TrainingConfig,
                             input_ids_key=input_ids_key,
                             drop_last=drop_last)
     
-    dataloader = DataLoader(dataset,
+    dataloader = DataLoader(clustered_dataset,
                             batch_sampler=sampler, 
                             collate_fn=sampler.collate_fn)
     return dataloader
-
-def random_slice(input_ids: torch.Tensor, attention_mask: torch.Tensor, max_length: int): # This seems inefficient, but I don't know how to do it better, as the current tokenizer doesn't support RANDOM truncation
-    batch_size, seq_length = input_ids.shape
-    start_indices = torch.randint(0, seq_length - max_length + 1, (batch_size,))
-    
-    input_ids = torch.stack([input_ids[i, start:start + max_length] for i, start in enumerate(start_indices)])
-    attention_mask = torch.stack([attention_mask[i, start:start + max_length] for i, start in enumerate(start_indices)])
-    
-    return input_ids, attention_mask
 
 class ClusteredDataset(Dataset):
     '''
     Create a custom dataset for the clustered dataset.
     The dataset is a dictionary with the identifier as the key, and the value is a dictionary with the label, list of sequences, and list of lengths.
     '''
-    def __init__(self, dataset_dict, input_ids_key: str = 'input_ids'):
-        self.dataset_dict = dataset_dict
-        self.identifiers = list(dataset_dict.keys())
+    def __init__(self, dataset, input_ids_key: str = 'input_ids'):
+        self.dataset = dataset
         self.input_ids_key = input_ids_key
 
     def __len__(self):
-        return len(self.identifiers)
-
-    def __getitem__(self, idx):
-        identifier = self.identifiers[idx]
-        data = self.dataset_dict[identifier]
+        return len(self.dataset)
+    
+    def __getitem__(self, idx: List[int]): # Way too convoluted, I'm sorry.
+        '''
+        Randomly choose an input_isd from the list of input_ids for each identifier.
+        '''
+        if isinstance(idx, int):
+            idx = [idx]
+        data = self.dataset[idx]
+        id = data['id']
         label = data['label']
-        index = random.randint(0, len(data[self.input_ids_key]) - 1)
-        input_ids = data[self.input_ids_key][index]
-        length = data['lengths'][index]
-        return {'id': identifier, 'label': label, 'length': length, 'input_ids': input_ids}
+        length = []
+        input_ids = []
+        for i in range(len(idx)):
+            index = random.choice(range(len(data[self.input_ids_key][i])))
+            input_ids.append(data[self.input_ids_key][i][index])
+            length.append(data['lengths'][i][index])
+        return {'id': id, 'label': label, 'length': length, 'input_ids': input_ids}
 
-class BatchSampler(Sampler):
+class BatchSampler(Sampler): 
     '''
     BatchSampler for variable length sequences, batching by similar lengths, to prevent excessive padding.
     '''
@@ -228,23 +273,28 @@ class BatchSampler(Sampler):
         self.input_ids_key = input_ids_key
 
     def collate_fn(self, batch):
-        input_ids = [item[self.input_ids_key] for item in batch]
-        lengths = [item['length'] for item in batch]
-
-        identifiers = [item['id'] for item in batch]
-        class_label = torch.tensor([item['label'] for item in batch], dtype=torch.long)
-
-        attention_mask = torch.zeros_like(input_ids)
-        attention_mask[torch.arange(input_ids.size(0)), :lengths] = 1
-
+        max_len = max(item['length'] for item in batch)
         if self.max_length is not None:
-            input_ids, attention_mask = random_slice(input_ids, attention_mask, self.max_length)
-        
+            max_len = min(max_len, self.max_length)
+        input_ids = torch.zeros(len(batch), max_len, dtype=torch.long)
+        attention_mask = torch.zeros(len(batch), max_len, dtype=torch.long)
+        class_labels = torch.zeros(len(batch), dtype=torch.long)
+        identifiers = [item['id'] for item in batch]
+        for i, item in enumerate(batch):
+            seq_len = item['length']
+            if seq_len > max_len:
+                index = random.randint(0, seq_len - max_len)
+                input_ids[i, :max_len] = torch.tensor(item[self.input_ids_key][index:index+max_len])
+                attention_mask[i, :max_len] = 1
+            else:
+                input_ids[i, :seq_len] = torch.tensor(item[self.input_ids_key])
+                attention_mask[i, :seq_len] = 1
+            class_labels[i] = item['label']
         return {
-            'id': identifiers,
-            'input_ids': input_ids,
-            'attention_mask': attention_mask,
-            'class_label': class_label,
+            'id': identifiers, 
+            'input_ids': input_ids, 
+            'attention_mask': attention_mask, 
+            'class_label': class_labels
         }
     
     def __iter__(self):
@@ -255,7 +305,7 @@ class BatchSampler(Sampler):
         step = self.mega_batch_size * self.batch_size
         for i in range(0, size, step):
             pool = indices[i:i+step]
-            pool = sorted(pool, key=lambda x: self.dataset[x]['length'])
+            pool = sorted(pool, key=lambda x: self.dataset[x]['length']) # TODO: fix the fact that the length returned is a different random coice than when the input_ids are chosen in the __getitem__ method
             mega_batch_indices = list(range(0, len(pool), self.batch_size))
             random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
             for j in mega_batch_indices:

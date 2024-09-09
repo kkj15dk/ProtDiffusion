@@ -8,8 +8,8 @@
 *.fa
 *.faa
 *.fna
-*/datasets/*
-dataset_*
+datasets
+ProtDiffusion/dataset/grouped_data
 
 # cache files
 *__pycache__

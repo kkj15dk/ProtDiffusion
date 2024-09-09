@@ -60,7 +60,6 @@ from datasets import load_dataset
 from tqdm import tqdm
 import os
 import concurrent.futures
-import json
 import multiprocessing
 from filelock import FileLock
 
@@ -74,51 +73,52 @@ def process_example(example,
     
     example_id = example[id_key] 
     file_path = os.path.join(output_dir, f'{example_id}.csv')
+    lock_path = file_path + '.lock'
 
-    if os.path.exists(file_path):
-        current_df = pd.read_csv(file_path)
-        current_df[proteinid_key] = current_df[proteinid_key].apply(eval)
-        current_df[sequence_key] = current_df[sequence_key].apply(eval)
-        current_df[length_key] = current_df[length_key].apply(eval)
-        
-        current_df.at[0, sequence_key].append(example[sequence_key])
-        current_df.at[0, length_key].append(example[length_key])
-        current_df.at[0, proteinid_key].append(example[proteinid_key])
-        
-        current_df.to_csv(file_path, index=False)
-    else:
-        new_row = {
-            id_key: example[id_key],
-            proteinid_key: [example[proteinid_key]],
-            sequence_key: [example[sequence_key]],
-            length_key: [example[length_key]]
-        }
-        pd.DataFrame([new_row]).to_csv(file_path, index=False)
+    with FileLock(lock_path):
+        if os.path.exists(file_path):
+            current_df = pd.read_csv(file_path)
+            current_df[proteinid_key] = current_df[proteinid_key].apply(eval)
+            current_df[sequence_key] = current_df[sequence_key].apply(eval)
+            current_df[length_key] = current_df[length_key].apply(eval)
+            
+            current_df.at[0, sequence_key].append(example[sequence_key])
+            current_df.at[0, length_key].append(example[length_key])
+            current_df.at[0, proteinid_key].append(example[proteinid_key])
+            
+            current_df.to_csv(file_path, index=False)
+        else:
+            new_row = {
+                id_key: example[id_key],
+                proteinid_key: [example[proteinid_key]],
+                sequence_key: [example[sequence_key]],
+                length_key: [example[length_key]]
+            }
+            pd.DataFrame([new_row]).to_csv(file_path, index=False)
 
-def process_chunk(dataset, indexes, output_dir, id_key, sequence_key, length_key, proteinid_key): 
-    for example in dataset[indexes]:
+def process_chunk(indexes, dataset, output_dir, id_key, sequence_key, length_key, proteinid_key):
+    for idx in indexes:
+        example = dataset[idx]
         process_example(example, output_dir, id_key, sequence_key, length_key, proteinid_key)
 
 def group_dataset(dataset, chunk_size, output_dir='/home/kaspe/ProtDiffusion/datasets/SPARQL_UniRefALL_grouped50', id_key='cluster50id', sequence_key='sequence', length_key='length', proteinid_key='proteinid'): 
     if not os.path.exists(output_dir): 
         os.makedirs(output_dir)
+
     with tqdm(total=len(dataset)) as pbar:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            futures = []
-            print('started making futures')
-            for i in range(0, len(dataset), chunk_size): 
-                indexes = list(range(i, min(i + chunk_size, len(dataset))))
-                future = executor.submit(process_chunk, dataset, indexes, output_dir, id_key, sequence_key, length_key, proteinid_key)
-                futures.append(future)
-                print('made future')
-            print('done making futures')
-            for future in concurrent.futures.as_completed(futures): 
+        with concurrent.futures.ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()//2) as executor:
+            futures = (executor.submit(process_chunk, list(range(i, min(i + chunk_size, len(dataset)))), dataset, output_dir, id_key, sequence_key, length_key, proteinid_key) for i in range(0, len(dataset), chunk_size))
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
                 pbar.update(chunk_size)
 
-dataset = load_dataset('/home/kaspe/ProtDiffusion/datasets/SPARQL_UniRefALL')
+# %%
+# Load the dataset
+dataset = load_dataset('/home/kaspe/ProtDiffusion/datasets/SPARQL_UniRefALL', split='train')
 print('Done loading dataset')
 
 # %%
 # Process the dataset and save intermediate results to disk
-group_dataset(dataset['train'], 1000)
+group_dataset(dataset, 10000)
 print('Done processing and saving clustered files')
+# %%

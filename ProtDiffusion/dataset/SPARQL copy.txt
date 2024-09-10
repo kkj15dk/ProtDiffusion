@@ -3,27 +3,38 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX up: <http://purl.uniprot.org/core/>
 
-SELECT DISTINCT ?clusterid ?familytaxonid (GROUP_CONCAT(DISTINCT ?sequence; separator=",") AS ?sequences)
+SELECT DISTINCT ?cluster100id ?cluster90id ?cluster50id ?proteinid ?kingdomid ?length ?sequence
 WHERE
 {
-  VALUES ?familytaxon { taxon:2 taxon:2759 }
-  VALUES ?identity { 0.5 }
+  VALUES ?kingdom { taxon:2 taxon:2759 }
+  VALUES ?identity100 { 1.0 }
+  VALUES ?identity50 { 0.5 }
   
-  ?organism rdfs:subClassOf ?familytaxon .
+  ?organism rdfs:subClassOf ?kingdom .
   
   ?protein a up:Protein ;
            up:organism ?organism .
   
   ?sequenceClass a up:Sequence ;
                  rdf:value ?sequence ;
-                 up:memberOf ?cluster ;
+                 up:memberOf ?cluster100 ;
+                 up:memberOf ?cluster90 ;
+                 up:memberOf ?cluster50 ;
                  up:length ?length ;
                  up:sequenceFor ?protein .
   
-  ?cluster up:identity ?identity .
+  ?cluster100 up:identity ?identity100 .
+  ?cluster90 up:identity ?identity90 .
+  ?cluster50 up:identity ?identity50 .
 
-  BIND(substr(str(?familytaxon), 34) AS ?familytaxonid)
-  BIND(substr(str(?cluster), 32) AS ?clusterid)
+  FILTER ( ?identity50 = 0.5 )
+  FILTER ( ?identity90 != 1.0 && ?identity90 != 0.5 )
+  FILTER ( ?identity100 = 1.0 )
+  
+  BIND(substr(str(?kingdom), 34) AS ?kingdomid)
+  BIND(substr(str(?cluster100), 32) AS ?cluster100id)
+  BIND(substr(str(?cluster90), 32) AS ?cluster90id)
+  BIND(substr(str(?cluster50), 32) AS ?cluster50id)
   BIND(substr(str(?protein), 33) AS ?proteinid)
   
   FILTER NOT EXISTS {
@@ -33,6 +44,5 @@ WHERE
             ?annotationType = up:Non-terminal_Residue_Annotation)
   }
   
-  FILTER ( ! contains(?sequence, 'X') && ! contains(?sequence, 'B') && ! contains(?sequence, 'Z'))
+  # FILTER ( ! contains(?sequence, 'X') && ! contains(?sequence, 'B') && ! contains(?sequence, 'Z'))
 } 
-GROUP BY ?clusterid ?familytaxonid

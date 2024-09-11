@@ -13,6 +13,9 @@ def make_directories(output_dir, chunk_size = 10000):
     for chunk in tqdm(chunks, total = 50000000//chunk_size, desc='Making directories'): # Total len is approximate
         for example in chunk.iterrows():
             cluster_id = example[1]['cluster50id']
+            file_path = os.path.join(output_dir, f'{cluster_id}.csv')
+            if os.path.exists(file_path):
+                continue
             kingdom = example[1][' kingdomid']
             if kingdom == 2: # Bacteria
                 kingdom = 0
@@ -20,7 +23,6 @@ def make_directories(output_dir, chunk_size = 10000):
                 kingdom = 1
             else:
                 raise ValueError(f'Unknown kingdom: {kingdom}')
-            file_path = os.path.join(output_dir, f'{cluster_id}.csv')
             new_row = {
                 'cluster50id': cluster_id,
                 'kingdom': kingdom,

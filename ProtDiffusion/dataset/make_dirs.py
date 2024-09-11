@@ -5,7 +5,7 @@ from datasets import load_dataset
 import gc
 
 def make_directories(output_dir, chunk_size = 10000):
-    chunks = pd.read_csv('/home/kkj/ProtDiffusion/datasets/UniRef50_cluster_ids_and_kingdom.csv', chunksize=chunk_size)
+    chunks = pd.read_csv('/home/kaspe/ProtDiffusion/datasets/UniRef50_cluster_ids_and_kingdom.csv', chunksize=chunk_size)
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
@@ -33,5 +33,5 @@ def make_directories(output_dir, chunk_size = 10000):
         gc.collect()
 
 # Example usage:
-output_dir = '/home/kkj/ProtDiffusion/datasets/SPARQL_UniRefALL_grouped50_inital'
+output_dir = '/home/kaspe/ProtDiffusion/datasets/SPARQL_UniRefALL_grouped50_inital'
 make_directories(output_dir)

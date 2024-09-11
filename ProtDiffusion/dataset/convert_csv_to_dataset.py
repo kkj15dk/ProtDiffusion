@@ -136,7 +136,7 @@ import pandas as pd
 from tqdm import tqdm
 from datasets import load_dataset
 import gc
-
+#%%
 def make_directories(output_dir):
     dataset = load_dataset('/home/kkj/ProtDiffusion/datasets/SPARQL_UniRefALL', split='train').select_columns(['cluster50id','kingdom'])
     
@@ -166,3 +166,6 @@ def make_directories(output_dir):
 # Example usage:
 output_dir = '/home/kkj/ProtDiffusion/datasets/SPARQL_UniRefALL_grouped50'
 make_directories(output_dir)
+# %%
+dataset = load_dataset('/home/kaspe/ProtDiffusion/datasets/SPARQL_UniRefALL', split='train', streaming=True)
+# %%

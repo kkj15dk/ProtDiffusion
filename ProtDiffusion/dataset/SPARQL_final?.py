@@ -16,35 +16,37 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX up: <http://purl.uniprot.org/core/>
 
-SELECT DISTINCT ?clusterid ?proteinid ?familytaxonid ?sequence
-WHERE {{
-  VALUES ?familytaxon {{ taxon:2 taxon:2759 }}
-  VALUES ?identity {{ 0.5 }}
-  
-  ?organism rdfs:subClassOf ?familytaxon .
+SELECT
+  (substr(str(?cluster), 32) AS ?clusterid)
+  (substr(str(?kingdom), 34) AS ?kingdomid)
+  (substr(str(?protein), 33) AS ?proteinid)
+  (strlen(str(?sequence)) AS ?length)
+  ?sequence
+WHERE
+{{
+  VALUES ?kingdom {{ taxon:2 taxon:2759 }}
+  ?organism rdfs:subClassOf ?kingdom .
+
+  ?protein a up:Protein ;
+           up:organism ?organism .
 
   ?sequenceClass a up:Sequence ;
                  rdf:value ?sequence ;
                  up:memberOf ?cluster ;
                  up:sequenceFor ?protein .
-                
-  ?protein a up:Protein ;
-                up:organism ?organism .
-  
-  ?cluster up:identity ?identity .
 
-  BIND(substr(str(?familytaxon), 34) AS ?familytaxonid)
-  BIND(substr(str(?cluster), 32) AS ?clusterid)
-  BIND(substr(str(?protein), 33) AS ?proteinid)
-                
-  FILTER NOT EXISTS {{
+  ?cluster up:identity 1.0.
+
+  OPTIONAL {{
     ?protein up:annotation ?annotation .
-    ?annotation a ?annotationType .
-    FILTER (?annotationType = up:Non-adjacent_Residues_Annotation || 
-            ?annotationType = up:Non-terminal_Residue_Annotation)
+    {{
+      ?annotation a up:Non-adjacent_Residues_Annotation .
+    }}  UNION {{
+      ?annotation a up:Non-terminal_Residue_Annotation
+      }}
   }}
-  
-  FILTER ( ! contains(?sequence, 'X') && ! contains(?sequence, 'B') && ! contains(?sequence, 'Z'))     
+  FILTER(! BOUND(?annotation))
+  # FILTER ( ! contains(?sequence, 'X') && ! contains(?sequence, 'B') && ! contains(?sequence, 'Z'))
 }}
 LIMIT {limit} OFFSET {offset}
 """

@@ -1,0 +1,35 @@
+PREFIX taxon: <http://purl.uniprot.org/taxonomy/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX up: <http://purl.uniprot.org/core/>
+
+SELECT
+  (substr(str(?cluster), 32) AS ?clusterid)
+  (substr(str(?kingdom), 34) AS ?kingdomid)
+  ?sequence
+WHERE
+{
+  VALUES ?kingdom { taxon:2 taxon:2759 }
+  ?organism rdfs:subClassOf ?kingdom .
+
+  ?protein a up:Protein ;
+           up:organism ?organism .
+
+  ?sequenceClass a up:Sequence ;
+                 rdf:value ?sequence ;
+                 up:memberOf ?cluster ;
+                 up:sequenceFor ?protein .
+
+  ?cluster up:identity 1.0.
+
+  OPTIONAL {
+    ?protein up:annotation ?annotation .
+    {
+      ?annotation a up:Non-adjacent_Residues_Annotation .
+    }  UNION {
+      ?annotation a up:Non-terminal_Residue_Annotation
+      }
+  }
+  FILTER(! BOUND(?annotation))
+  # FILTER ( ! contains(?sequence, 'X') && ! contains(?sequence, 'B') && ! contains(?sequence, 'Z'))
+}

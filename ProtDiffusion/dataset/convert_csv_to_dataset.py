@@ -1,19 +1,28 @@
 # %%
 import re
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, load_from_disk, Dataset
 from tqdm import tqdm
 import os
 import pandas as pd
 from transformers import PreTrainedTokenizerFast
 
 # %%
+# Define the parameters
+sequence_key = 'sequence'
+id_key = 'clusterid' # This is the column to group by
+label_key = 'familytaxonid'
+pad_to_multiple_of = 16
+output_path = '/home/kkj/ProtDiffusion/datasets/'
+input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv' # Has to be sorted by id
+filename = 'testcase-UniRef50_sorted'
+
+# %%
 # Define the transformation function for batches
 def encode(example, 
             tokenizer: PreTrainedTokenizerFast, 
             sequence_key='sequence', 
-            id_key='clusterid', 
             label_key='kingdom', 
-            pad_to_multiple_of=16
+            pad_to_multiple_of=pad_to_multiple_of,
 ):
     # Use regular expression to extract the numeric part for each example in the batch
     output = tokenizer(example[sequence_key],
@@ -23,7 +32,6 @@ def encode(example,
                         return_token_type_ids=False,
                         return_attention_mask=False, # We need to attend to padding tokens, so we set this to False
     )
-    output['id'] = example[id_key]
     label = example[label_key]
     if label == 2:
         output['label'] = 0
@@ -34,60 +42,76 @@ def encode(example,
     output['length'] = len(output['input_ids'])
     return output
 
-def agg_fn(chunk: pd.DataFrame, key: str) -> pd.DataFrame:
-    chunk.groupby(key).agg({
-        'label': 'first', 
+def stream_groupby_gen(dataset: Dataset, 
+                       id_key: str, 
+                       chunk_size=10000, 
+):
+    '''
+    Input:
+    A dataset with columns 'input_ids', 'label', 'length', and id_key. id_key is the column to group by, and will be renamed to 'id'.
+    '''
+    agg = lambda chunk: chunk.groupby('id').agg({
+        'label': list, 
         'length': list,
-        'input_ids': list, 
+        'input_ids': list
         })
 
-def stream_groupby_csv(dataset: Dataset, key: str, agg = agg_fn, chunk_size=1e6, output_path='output.csv'):
-
     # Tell pandas to read the data in chunks
-    chunks = dataset.to_pandas(chunksize=chunk_size, batched=True)
+    chunks = dataset.rename_column(id_key, 'id').to_pandas(batched=True, batch_size=chunk_size)
+    
     orphans = pd.DataFrame()
 
-    for chunk in chunks:
+    for chunk in tqdm(chunks, desc='Processing chunks', unit='chunk', total=len(dataset)//chunk_size):
 
         # Add the previous orphans to the chunk
         chunk = pd.concat((orphans, chunk))
 
         # Determine which rows are orphans
-        last_val = chunk[key].iloc[-1]
-        is_orphan = chunk[key] == last_val
+        last_val = chunk['id'].iloc[-1]
+        is_orphan = chunk['id'] == last_val
 
         # Put the new orphans aside
         chunk, orphans = chunk[~is_orphan], chunk[is_orphan]
-
         # Perform the aggregation and store the results
-        agg(chunk, key).to_csv(output_path, mode='a', header=False)
-
+        chunk = agg(chunk)
+        dataset = Dataset.from_pandas(chunk.reset_index())
+        for i in range(len(dataset)):
+            yield dataset[i]
     # Don't forget the remaining orphans
     if len(orphans):
-        agg(orphans, key).to_csv(output_path, mode='a', header=False)
+        chunk = agg(orphans)
+        dataset = Dataset.from_pandas(chunk.reset_index())
+        for i in range(len(dataset)):
+            yield dataset[i]
 
 # %%
 # Load the dataset
-dataset = load_dataset('csv', data_files='/home/kaspe/ProtDiffusion/datasets/SPARQL_UniRefALL.csv')
-
-# %%
-# Rename columns as needed
-dataset = dataset.rename_column(' sequence', 'sequence')
-dataset = dataset.rename_column(' kingdomid', 'kingdom')
-dataset = dataset.rename_column('clusterid', 'clusterid')
+dataset = load_dataset('csv', data_files=input_path)['train']
 tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer_new")
 
 # %%
-# Apply the transformation to the 'length' and 'kingdom' column in batches
-dataset = dataset.map(encode, 
-                        fn_kwargs={'sequence_key': 'sequence', 
-                                    'id_key': 'clusterid',
-                                    'label_key': 'kingdom',
-                                    'pad_to_multiple_of': 16, 
-                                    'tokenizer': tokenizer},
-                        batched=False)
+# Encode the dataset
+if not os.path.exists(f'{output_path}{filename}_encoded'):
+    print(f"Encoding {filename}")
+    dataset = dataset.map(encode, 
+                            fn_kwargs={'sequence_key': sequence_key, 
+                                        'label_key': label_key,
+                                        'pad_to_multiple_of': pad_to_multiple_of, 
+                                        'tokenizer': tokenizer},
+                            remove_columns=[sequence_key, label_key],
+                            batched=False)
+    dataset.save_to_disk(f'{output_path}{filename}_encoded')
+else:
+    print(f"{filename} already encoded")
 
 # %%
-dataset.save_to_disk('/home/kaspe/ProtDiffusion/datasets/SPARQL_UniRef50_encoded')
+# Group by the id column and aggregate the input_ids, labels, and lengths
+if not os.path.exists(f'{output_path}{filename}_encoded_grouped'):
+    print(f"Grouping {filename}")
+    dataset = load_from_disk(f'{output_path}{filename}_encoded')
+    dataset = Dataset.from_generator(stream_groupby_gen, gen_kwargs={'dataset': dataset, 'id_key': id_key})
+    dataset.save_to_disk(f'{output_path}{filename}_encoded_grouped')
+else:
+    print(f"{filename} already grouped")
 
-stream_groupby_csv(dataset, key='id', output_path='/home/kaspe/ProtDiffusion/datasets/SPARQL_UniRef50_encoded_grouped.csv')
+print('Doen')

@@ -1,46 +1,31 @@
 # %%
-from training_utils import TrainingConfig, prepare_dataset, prepare_dataloader, set_seed, VAETrainer
+from training_utils import TrainingConfig, prepare_dataloader, set_seed, VAETrainer
 from transformers import PreTrainedTokenizerFast
 
-from datasets import load_dataset
+from datasets import load_from_disk
 
 from New1D.autoencoder_kl_1d import AutoencoderKL1D
 
 import os
 
 config = TrainingConfig(
-    num_epochs=1000,  # the number of epochs to train for
+    num_epochs=1,  # the number of epochs to train for
     batch_size=16,
     save_image_model_steps=1000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50-12-swish-conv"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50-14-swish-conv"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     max_len=512,
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-# config.dataset_name = "kkj15dk/UniRef50"
-# dataset = load_dataset(config.dataset_name) # , download_mode='force_redownload')
-
-dataset = load_dataset('csv', data_files='datasets/SPARQL_UniRef50.csv')
-dataset = dataset.rename_column(' sequence', "sequence")
-dataset = dataset.rename_column(" familytaxonid", "familytaxonid")
-dataset = dataset.rename_column(" proteinid", "proteinid")
-dataset = dataset.rename_column (" length", "length")
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted_encoded_grouped')
 dataset = dataset.shuffle(config.seed)
 
+# %%
 tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer_new")
 
-dataset = prepare_dataset(config, 
-                          dataset=dataset['train'], 
-                          dataset_path='datasets/UniRef50', 
-                          sequence_key='sequence',
-                          id_key='clusterid',
-                          label_key='familytaxonid',
-                          tokenizer=tokenizer,
-)
-
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.001
+train_test_split_ratio = 0.2
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 temp_dataset = train_val_test_split['test']
@@ -57,9 +42,9 @@ print(f"Validation dataset length: {len(val_dataset)}")
 print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
-train_dataloader = prepare_dataloader(config, train_dataset, tokenizer)
-val_dataloader = prepare_dataloader(config, val_dataset, tokenizer)
-test_dataloader = prepare_dataloader(config, test_dataset, tokenizer)
+train_dataloader = prepare_dataloader(config, train_dataset)
+val_dataloader = prepare_dataloader(config, val_dataset)
+test_dataloader = prepare_dataloader(config, test_dataset)
 
 # %%
 model = AutoencoderKL1D(

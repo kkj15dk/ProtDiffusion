@@ -8,6 +8,7 @@
 *.fa
 *.faa
 *.fna
+*.csv
 datasets
 ProtDiffusion/dataset/grouped_data
 

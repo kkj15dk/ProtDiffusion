@@ -167,40 +167,8 @@ def group_data(dataset: Dataset, chunk_size: int = 10000, output_dir: str = "gro
     grouped_dataset = Dataset.from_generator(data_generator)
     return grouped_dataset
 
-
-def prepare_dataset(config: TrainingConfig,
-                    dataset_path: str,
-                    tokenizer: PreTrainedTokenizerFast,
-                    dataset: Optional[Dataset] = None, 
-                    sequence_key: str = 'sequence',
-                    id_key: str = 'clusterid',
-                    label_key: str = 'familytaxonid',
-):
-    assert config.max_len % config.pad_to_multiple_of == 0, "max_len must be a multiple of pad_to_multiple_of"
-
-    if not os.path.exists(dataset_path):
-        if dataset is None:
-            raise ValueError("Dataset not found, please provide a dataset, or a valid path to one.")
-
-        print(f"Encoding dataset to {dataset_path}")
-        dataset = dataset.map(encode, 
-                            fn_kwargs={'sequence_key': sequence_key, 
-                                        'id_key': id_key,
-                                        'label_key': label_key,
-                                        'pad_to_multiple_of': config.pad_to_multiple_of, 
-                                        'tokenizer': tokenizer},
-                                        batched=False,
-                                        remove_columns=[sequence_key])
-        grouped_dataset = group_data(dataset)
-        grouped_dataset.save_to_disk(f"{dataset_path}")
-    else:
-        grouped_dataset = Dataset.load_from_disk(f"{dataset_path}")
-
-    return grouped_dataset
-
 def prepare_dataloader(config: TrainingConfig,
                         dataset: Dataset,
-                        tokenizer: PreTrainedTokenizerFast,
                         input_ids_key: str = 'input_ids',
                         drop_last: bool = False,
                         ) -> DataLoader:
@@ -210,9 +178,7 @@ def prepare_dataloader(config: TrainingConfig,
     sampler = BatchSampler(clustered_dataset,
                             config.batch_size,
                             config.mega_batch,
-                            tokenizer=tokenizer,
                             max_length=config.max_len,
-                            pad_to_multiple_of=config.pad_to_multiple_of,
                             input_ids_key=input_ids_key,
                             drop_last=drop_last)
     
@@ -226,28 +192,36 @@ class ClusteredDataset(Dataset):
     Create a custom dataset for the clustered dataset.
     The dataset is a dictionary with the identifier as the key, and the value is a dictionary with the label, list of sequences, and list of lengths.
     '''
-    def __init__(self, dataset, input_ids_key: str = 'input_ids'):
+    def __init__(self, dataset, 
+                 input_ids_key: str = 'input_ids',
+                 label_key: str = 'label',
+                 length_key: str = 'length',
+    ):
         self.dataset = dataset
         self.input_ids_key = input_ids_key
+        self.label_key = label_key
+        self.length_key = length_key
 
     def __len__(self):
         return len(self.dataset)
     
     def __getitem__(self, idx: List[int]): # Way too convoluted, I'm sorry.
         '''
-        Randomly choose an input_isd from the list of input_ids for each identifier.
+        Randomly choose an input_ids from the list of input_ids for each identifier.
         '''
         if isinstance(idx, int):
             idx = [idx]
         data = self.dataset[idx]
         id = data['id']
-        label = data['label']
+        label = []
         length = []
         input_ids = []
         for i in range(len(idx)):
-            index = random.choice(range(len(data[self.input_ids_key][i])))
+            index = random.randint(0, len(data[self.length_key][i]) - 1)
+
             input_ids.append(data[self.input_ids_key][i][index])
-            length.append(data['lengths'][i][index])
+            length.append(data[self.length_key][i][index])
+            label.append(data[self.label_key][i][index])
         return {'id': id, 'label': label, 'length': length, 'input_ids': input_ids}
 
 class BatchSampler(Sampler): 
@@ -258,18 +232,14 @@ class BatchSampler(Sampler):
                  dataset, 
                  batch_size, 
                  mega_batch_size, 
-                 tokenizer: PreTrainedTokenizerFast, 
                  max_length: Optional[int] = None,
-                 pad_to_multiple_of: int = 16,
                  input_ids_key: str = 'input_ids', 
                  drop_last = True):
         self.dataset = dataset
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
         self.drop_last = drop_last
-        self.tokenizer = tokenizer
         self.max_length = max_length
-        self.pad_to_multiple_of = pad_to_multiple_of
         self.input_ids_key = input_ids_key
 
     def collate_fn(self, batch):

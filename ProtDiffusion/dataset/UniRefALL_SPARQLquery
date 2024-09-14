@@ -3,8 +3,10 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX up: <http://purl.uniprot.org/core/>
 
-SELECT
-  (substr(str(?cluster), 32) AS ?clusterid)
+SELECT DISTINCT
+  (substr(str(?cluster50), 32) AS ?cluster50id)
+  (substr(str(?cluster90), 32) AS ?cluster90id)
+  (substr(str(?cluster100), 32) AS ?cluster100id)
   (substr(str(?kingdom), 34) AS ?kingdomid)
   ?sequence
 WHERE
@@ -17,10 +19,15 @@ WHERE
 
   ?sequenceClass a up:Sequence ;
                  rdf:value ?sequence ;
-                 up:memberOf ?cluster ;
+                 up:memberOf ?cluster100 ;
+                 up:memberOf ?cluster50 ;
+                 up:memberOf ?cluster90 ;
                  up:sequenceFor ?protein .
 
-  ?cluster up:identity 1.0.
+  ?cluster100 up:identity 1.0 .
+  ?cluster50 up:identity 0.5 .
+  ?cluster90 up:identity ?identity90 .
+  FILTER ( ?identity90 != 1.0 && ?identity90 != 0.5 )
 
   OPTIONAL {
     ?protein up:annotation ?annotation .
@@ -31,5 +38,4 @@ WHERE
       }
   }
   FILTER(! BOUND(?annotation))
-  # FILTER ( ! contains(?sequence, 'X') && ! contains(?sequence, 'B') && ! contains(?sequence, 'Z'))
 }

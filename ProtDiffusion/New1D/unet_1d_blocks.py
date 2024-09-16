@@ -630,10 +630,10 @@ class DownEncoderBlock1D(nn.Module):
         for resnet in self.resnets:
             hidden_states = resnet(hidden_states, temb=None)
 
-        if self.downsamplers is not None:
+        if self.downsamplers is not None: # Downsample the hidden states
             for downsampler in self.downsamplers:
                 hidden_states = downsampler(hidden_states)
-            if attention_mask is not None:
+            if attention_mask is not None: # Downsample the attention mask by taking every other element, starting from the first element
                 attention_mask = attention_mask[:, ::2]
 
         return hidden_states, attention_mask

@@ -12,20 +12,20 @@ config = TrainingConfig(
     num_epochs=1,  # the number of epochs to train for
     batch_size=16,
     save_image_model_steps=1000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50-14-swish-conv"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     max_len=512,
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted_encoded_grouped')
+dataset = load_from_disk('/home/kaspe/ProtDiffusion/datasets/UniRef50_encoded_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer_new")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
 
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.2
+train_test_split_ratio = 0.0002
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 temp_dataset = train_val_test_split['test']

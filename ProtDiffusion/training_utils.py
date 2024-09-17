@@ -265,15 +265,15 @@ class BatchSampler(Sampler):
 
     def collate_fn(self, batch):
         sample_max_len = max(item['length'] for item in batch)
-        max_length = self.max_length
+        max_length_cap = self.max_length
         input_ids_key = self.input_ids_key
 
-        if max_length is not None:
-            sample_max_len = min(sample_max_len, max_length)
+        if max_length_cap is not None:
+            max_len = min(sample_max_len, max_length_cap)
 
         batch_size = len(batch)
-        input_ids = torch.zeros(batch_size, sample_max_len, dtype=torch.long)
-        attention_mask = torch.zeros(batch_size, sample_max_len, dtype=torch.uint8)
+        input_ids = torch.zeros(batch_size, max_len, dtype=torch.long)
+        attention_mask = torch.zeros(batch_size, max_len, dtype=torch.uint8)
         class_labels = torch.zeros(batch_size, dtype=torch.long)
         identifiers = [item['id'] for item in batch]
 
@@ -281,10 +281,10 @@ class BatchSampler(Sampler):
             seq_len = item['length']
             input_ids_seq = item[input_ids_key]
 
-            if seq_len > sample_max_len:
-                index = random.randint(0, seq_len - sample_max_len)
-                input_ids[i, :sample_max_len] = torch.tensor(input_ids_seq[index:index+sample_max_len], dtype=torch.long)
-                attention_mask[i, :sample_max_len] = 1
+            if seq_len > max_len:
+                index = random.randint(0, seq_len - max_len)
+                input_ids[i, :max_len] = torch.tensor(input_ids_seq[index:index+max_len], dtype=torch.long)
+                attention_mask[i, :max_len] = 1
             else:
                 input_ids[i, :seq_len] = torch.tensor(input_ids_seq, dtype=torch.long)
                 attention_mask[i, :seq_len] = 1

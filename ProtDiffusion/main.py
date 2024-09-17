@@ -18,14 +18,14 @@ config = TrainingConfig(
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted_encoded_grouped')
+dataset = load_from_disk('/home/kaspe/ProtDiffusion/datasets/UniRef50_encoded_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer_new")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
 
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.2
+train_test_split_ratio = 0.0002
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 temp_dataset = train_val_test_split['test']
@@ -85,4 +85,3 @@ Trainer = VAETrainer(model,
 
 # %%
 Trainer.train_loop()
-

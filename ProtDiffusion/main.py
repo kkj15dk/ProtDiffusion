@@ -47,6 +47,19 @@ val_dataloader = prepare_dataloader(config, val_dataset)
 test_dataloader = prepare_dataloader(config, test_dataset)
 
 # %%
+def loop_over_dataloader(dataloader, num_samples=1):
+    for i, batch in enumerate(dataloader):
+        if i >= num_samples:
+            break
+        print(f"Batch {i}")
+
+import timeit
+one_loop = timeit.timeit(lambda: loop_over_dataloader(train_dataloader, 1), number=1)
+ten_loop = timeit.timeit(lambda: loop_over_dataloader(train_dataloader, 10), number=1)
+print(f"Time for one sample: {one_loop}")
+print(f"Time for ten samples: {ten_loop}")
+
+# %%
 model = AutoencoderKL1D(
     num_class_embeds=tokenizer.vocab_size + 1,  # the number of class embeddings
     

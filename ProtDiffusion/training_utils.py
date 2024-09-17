@@ -175,7 +175,7 @@ def prepare_dataloader(config: TrainingConfig,
     
     clustered_dataset = ClusteredDataset(dataset, input_ids_key=input_ids_key)
 
-    sampler = BatchSampler(clustered_dataset,
+    sampler = BatchSampler(dataset,
                             config.batch_size,
                             config.mega_batch,
                             max_length=config.max_len,
@@ -205,26 +205,44 @@ class ClusteredDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx: Union[List[int], int]): # Way too convoluted, I'm sorry.
+    def __getitem__(self, idx: Union[List[tuple[int, int]], tuple[int,int], List[int], int]): # Way too convoluted, I'm sorry.
         '''
-        Randomly choose an input_ids from the list of input_ids for each identifier.
+        Get a sample from the dataset. Using two indices, the first index is the cluster index, and the second index is the sample index.
+        
+        If you choose a single index, or a list of single integers it will return the entire cluster.
         '''
-        if isinstance(idx, int):
-            idx = [idx]
 
-        data = self.dataset[idx]
+        if isinstance(idx, tuple):
+            if isinstance(idx[0], int) and isinstance(idx[1], int):
+                idx = [idx]
+
+        if isinstance(idx, int):
+            idx = [(idx, i) for i in range(len(self.dataset[idx][self.label_key]))]
+
+        if isinstance(idx, list):
+            if isinstance(idx[0], int):
+                idx = [(index, i) for index in idx for i in range(len(self.dataset[index][self.label_key]))]
+        
+        clusterindex, sampleindex = zip(*idx)
+
+        data = self.dataset[clusterindex]
         length_key = self.length_key
         input_ids_key = self.input_ids_key
         label_key = self.label_key
 
         id = data['id']
-        # Precompute random indices
-        random_indices = [random.randint(0, len(data[length_key][i]) - 1) for i in range(len(idx))]
 
-        # Use list comprehensions to gather the data
-        input_ids = [data[input_ids_key][i][random_indices[i]] for i in range(len(idx))]
-        length = [data[length_key][i][random_indices[i]] for i in range(len(idx))]
-        label = [data[label_key][i][random_indices[i]] for i in range(len(idx))]
+        label = []
+        length = []
+        input_ids = []
+        
+        for i in range(len(idx)):
+            sampleindex_i = sampleindex[i]
+
+            input_ids.append(data[input_ids_key][i][sampleindex_i])
+            length.append(data[length_key][i][sampleindex_i])
+            label.append(data[label_key][i][sampleindex_i])
+
         return {'id': id, 'label': label, 'length': length, 'input_ids': input_ids}
 
 class BatchSampler(Sampler): 
@@ -232,12 +250,12 @@ class BatchSampler(Sampler):
     BatchSampler for variable length sequences, batching by similar lengths, to prevent excessive padding.
     '''
     def __init__(self, 
-                 dataset, 
-                 batch_size, 
-                 mega_batch_size, 
+                 dataset: Dataset, 
+                 batch_size: int, 
+                 mega_batch_size: int, 
                  max_length: Optional[int] = None,
                  input_ids_key: str = 'input_ids', 
-                 drop_last = True):
+                 drop_last: bool = True):
         self.dataset = dataset
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
@@ -247,15 +265,15 @@ class BatchSampler(Sampler):
 
     def collate_fn(self, batch):
         sample_max_len = max(item['length'] for item in batch)
-        max_length = self.max_length
+        max_length_cap = self.max_length
         input_ids_key = self.input_ids_key
 
-        if max_length is not None:
-            sample_max_len = min(sample_max_len, max_length)
+        if max_length_cap is not None:
+            max_len = min(sample_max_len, max_length_cap)
 
         batch_size = len(batch)
-        input_ids = torch.zeros(batch_size, sample_max_len, dtype=torch.long)
-        attention_mask = torch.zeros(batch_size, sample_max_len, dtype=torch.uint8)
+        input_ids = torch.zeros(batch_size, max_len, dtype=torch.long)
+        attention_mask = torch.zeros(batch_size, max_len, dtype=torch.uint8)
         class_labels = torch.zeros(batch_size, dtype=torch.long)
         identifiers = [item['id'] for item in batch]
 
@@ -263,10 +281,10 @@ class BatchSampler(Sampler):
             seq_len = item['length']
             input_ids_seq = item[input_ids_key]
 
-            if seq_len > sample_max_len:
-                index = random.randint(0, seq_len - sample_max_len)
-                input_ids[i, :sample_max_len] = torch.tensor(input_ids_seq[index:index+sample_max_len], dtype=torch.long)
-                attention_mask[i, :sample_max_len] = 1
+            if seq_len > max_len:
+                index = random.randint(0, seq_len - max_len)
+                input_ids[i, :max_len] = torch.tensor(input_ids_seq[index:index+max_len], dtype=torch.long)
+                attention_mask[i, :max_len] = 1
             else:
                 input_ids[i, :seq_len] = torch.tensor(input_ids_seq, dtype=torch.long)
                 attention_mask[i, :seq_len] = 1
@@ -287,22 +305,27 @@ class BatchSampler(Sampler):
 
         step = self.mega_batch_size * self.batch_size
         for i in range(0, size, step):
-            pool = indices[i:i+step]
+            pool_indices = indices[i:i+step]
 
-            lengths = self.dataset[pool]['length']
+            pool_lengths = [self.dataset[idx]['length'] for idx in pool_indices] # list of lists of lengths
+            sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths]
+            pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
 
-            # Sort the pool by lengths
-            pool = [x for _, x in sorted(zip(lengths, pool), key=lambda pair: pair[0])]
+            # Zip indices with sample indices and sort by length more efficiently
+            pool = zip(pool_indices, sample_indices)
 
-            mega_batch_indices = list(range(0, len(pool), self.batch_size))
+            # Use zip directly in sorting to avoid pool_indices.index call
+            pool_sorted = [pair for pair, _ in sorted(zip(pool, pool_lengths), key=lambda x: x[1])]
+            
+            mega_batch_indices = list(range(0, len(pool_sorted), self.batch_size))
             random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
             
             for j in mega_batch_indices:
-                if self.drop_last and j + self.batch_size > len(pool): # drop the last batch if it's too small
+                if self.drop_last and j + self.batch_size > len(pool_sorted): # drop the last batch if it's too small
                     continue
 
-                batch = pool[j:j+self.batch_size]
-                random.shuffle(batch) # shuffle the batch, so that the model doesn't see the same order of lengths every time
+                batch = pool_sorted[j:j+self.batch_size]
+                # random.shuffle(batch) # shuffle the batch, so that the model doesn't see the same order of lengths every time. This might not be necessary.
                 
                 yield batch
 

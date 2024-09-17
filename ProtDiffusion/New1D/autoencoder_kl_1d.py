@@ -231,6 +231,8 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         r"""
         Args:
             sample (`torch.Tensor`): Input sample.
+            attention_mask (`torch.Tensor`, *optional*):
+                Attention mask for the input sample.
             sample_posterior (`bool`, *optional*, defaults to `False`):
                 Whether to sample from the posterior.
             return_dict (`bool`, *optional*, defaults to `True`):
@@ -239,7 +241,8 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         x = sample
 
         x = self.embedding_in(x)
-        x = x.permute(0, 2, 1)
+        x = x.permute(0, 2, 1) # (batch_size, num_channels, seq_len)
+        x = x * attention_mask.unsqueeze(1) # (batch_size, num_channels, seq_len) * (batch_size, 1, seq_len) to set padding to 0 vectors
 
         output = self.encode(x, attention_mask)
         posterior = output.latent_dist

@@ -9,10 +9,10 @@ from New1D.autoencoder_kl_1d import AutoencoderKL1D
 import os
 
 config = TrainingConfig(
-    num_epochs=1,  # the number of epochs to train for
-    batch_size=16,
-    save_image_model_steps=1000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50"),  # the model name locally and on the HF Hub
+    num_epochs=10,  # the number of epochs to train for
+    batch_size=32,
+    save_image_model_steps=100,
+    output_dir=os.path.join("output","protein-VAE-UniRef50-15-swish-conv"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     max_len=512,
 )
@@ -45,19 +45,6 @@ print(f"Test dataset length: {len(test_dataset)}")
 train_dataloader = prepare_dataloader(config, train_dataset)
 val_dataloader = prepare_dataloader(config, val_dataset)
 test_dataloader = prepare_dataloader(config, test_dataset)
-
-# %%
-def loop_over_dataloader(dataloader, num_samples=1):
-    for i, batch in enumerate(dataloader):
-        if i >= num_samples:
-            break
-        print(f"Batch {i}")
-
-import timeit
-one_loop = timeit.timeit(lambda: loop_over_dataloader(train_dataloader, 1), number=1)
-ten_loop = timeit.timeit(lambda: loop_over_dataloader(train_dataloader, 10), number=1)
-print(f"Time for one sample: {one_loop}")
-print(f"Time for ten samples: {ten_loop}")
 
 # %%
 model = AutoencoderKL1D(
@@ -98,4 +85,3 @@ Trainer = VAETrainer(model,
 
 # %%
 Trainer.train_loop()
-

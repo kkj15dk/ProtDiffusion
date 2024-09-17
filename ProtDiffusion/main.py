@@ -98,4 +98,3 @@ Trainer = VAETrainer(model,
 
 # %%
 Trainer.train_loop()
-

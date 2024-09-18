@@ -269,7 +269,7 @@ class BatchSampler(Sampler):
         self.drop_last = drop_last
         self.max_length = max_length
         self.input_ids_key = input_ids_key
-        self.dataset_lengths = [dataset[i]['length'] for i in range(len(dataset))]
+        self.dataset_lengths = dataset['length']
 
     def collate_fn(self, batch):
         sample_max_len = max(item['length'] for item in batch)

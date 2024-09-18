@@ -31,6 +31,8 @@ import json
 
 from New1D.autoencoder_kl_1d import AutoencoderKL1D
 
+import time
+
 # Set a random seed in a bunch of different places
 def set_seed(seed: int = 42) -> None:
     """
@@ -262,12 +264,12 @@ class BatchSampler(Sampler):
                  max_length: Optional[int] = None,
                  input_ids_key: str = 'input_ids', 
                  drop_last: bool = True):
-        self.dataset = dataset
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
         self.drop_last = drop_last
         self.max_length = max_length
         self.input_ids_key = input_ids_key
+        self.dataset_lengths = [dataset[i]['length'] for i in range(len(dataset))]
 
     def collate_fn(self, batch):
         sample_max_len = max(item['length'] for item in batch)
@@ -307,7 +309,7 @@ class BatchSampler(Sampler):
         }
     
     def __iter__(self):
-        size = len(self.dataset)
+        size = len(self.dataset_lengths)
         indices = list(range(size))
         random.shuffle(indices)
 
@@ -315,31 +317,32 @@ class BatchSampler(Sampler):
         for i in range(0, size, step):
             pool_indices = indices[i:i+step]
 
-            pool_lengths = [self.dataset[idx]['length'] for idx in pool_indices] # list of lists of lengths
+            pool_lengths = [self.dataset_lengths[i] for i in pool_indices] # list of lists of lengths
             sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths]
             pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
 
             # Zip indices with sample indices and sort by length more efficiently
             pool = list(zip(pool_lengths, pool_indices, sample_indices))
+            pool.sort(key=lambda x: x[0])
 
-            pool_sorted = pool.sort(key=lambda x: x[0])
-            
-            mega_batch_indices = list(range(0, len(pool_sorted), self.batch_size))
+            pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
+
+            mega_batch_indices = list(range(0, len(pool), self.batch_size))
             random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
-            
+
             for j in mega_batch_indices:
-                if self.drop_last and j + self.batch_size > len(pool_sorted): # drop the last batch if it's too small
+                if self.drop_last and j + self.batch_size > len(pool): # drop the last batch if it's too small
                     continue
 
-                batch = pool_sorted[j:j+self.batch_size][1:] # drop the length from the tuple
+                batch = pool[j:j+self.batch_size]
                 
                 yield batch
 
     def __len__(self):
         if self.drop_last:
-            return len(self.dataset) // self.batch_size
+            return len(self.dataset_lengths) // self.batch_size
         else:
-            return (len(self.dataset) + self.batch_size - 1) // self.batch_size
+            return (len(self.dataset_lengths) + self.batch_size - 1) // self.batch_size
 
 @dataclass
 class TrainingVariables:
@@ -574,3 +577,5 @@ class VAETrainer:
                         )
                     self.model.train() # Set model back to train mode
         self.accelerator.end_training()
+
+# %%

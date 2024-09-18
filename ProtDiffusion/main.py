@@ -16,7 +16,7 @@ config = TrainingConfig(
     learning_rate = 1e-5,
     lr_warmup_steps = 1000,
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_testold"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_test"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     max_len=512,
 )
@@ -29,7 +29,7 @@ dataset = dataset.shuffle(config.seed)
 tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
 
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.2
+train_test_split_ratio = 0.0002
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 temp_dataset = train_val_test_split['test']
@@ -47,9 +47,9 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-train_dataloader = prepare_dataloader(config, train_dataset, num_workers=1)
-val_dataloader = prepare_dataloader(config, val_dataset, num_workers=1)
-test_dataloader = prepare_dataloader(config, test_dataset, num_workers=1)
+train_dataloader = prepare_dataloader(config, train_dataset, num_workers=16)
+val_dataloader = prepare_dataloader(config, val_dataset, num_workers=16)
+test_dataloader = prepare_dataloader(config, test_dataset, num_workers=16)
 
 # %%
 model = AutoencoderKL1D(

@@ -89,11 +89,11 @@ def stream_groupby_gen(dataset: Dataset,
 dataset = load_dataset('csv', data_files=input_path)['train']
 tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer_new")
 
-# # %%
-# dataset = dataset.rename_column(' kingdomid', 'kingdomid')
-# dataset = dataset.rename_column(' sequence', 'sequence')
-# dataset = dataset.rename_column(' cluster90id', 'cluster90id')
-# dataset = dataset.rename_column(' cluster100id', 'cluster100id')
+# %%
+dataset = dataset.rename_column(' kingdomid', 'kingdomid')
+dataset = dataset.rename_column(' sequence', 'sequence')
+dataset = dataset.rename_column(' cluster90id', 'cluster90id')
+dataset = dataset.rename_column(' cluster100id', 'cluster100id')
 
 # %%
 # Encode the dataset

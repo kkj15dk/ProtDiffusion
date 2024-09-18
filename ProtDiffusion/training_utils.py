@@ -171,20 +171,26 @@ def prepare_dataloader(config: TrainingConfig,
                         dataset: Dataset,
                         input_ids_key: str = 'input_ids',
                         drop_last: bool = False,
-                        ) -> DataLoader:
-    
-    clustered_dataset = ClusteredDataset(dataset, input_ids_key=input_ids_key)
+                        num_workers: int = 0,
+    ) -> DataLoader:
 
     sampler = BatchSampler(dataset,
                             config.batch_size,
                             config.mega_batch,
                             max_length=config.max_len,
                             input_ids_key=input_ids_key,
-                            drop_last=drop_last)
+                            drop_last=drop_last
+    )
+    
+    clustered_dataset = ClusteredDataset(dataset, 
+                                         input_ids_key=input_ids_key
+    )
     
     dataloader = DataLoader(clustered_dataset,
                             batch_sampler=sampler, 
-                            collate_fn=sampler.collate_fn)
+                            collate_fn=sampler.collate_fn,
+                            num_workers=num_workers,
+    )
     return dataloader
 
 class ClusteredDataset(Dataset):

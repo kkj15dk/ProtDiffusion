@@ -16,7 +16,7 @@ config = TrainingConfig(
     learning_rate = 1e-5,
     lr_warmup_steps = 1000,
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_test8"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_testold"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     max_len=512,
 )

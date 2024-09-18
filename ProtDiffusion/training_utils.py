@@ -75,7 +75,7 @@ class TrainingConfig:
     push_to_hub = False  # Not implemented yet. Whether to upload the saved model to the HF Hub
     hub_model_id = "kkj15dk/protein-VAE"  # the name of the repository to create on the HF Hub
     hub_private_repo = False
-    overwrite_output_dir = True  # overwrite the old model when re-running the notebook
+    overwrite_output_dir = False  # overwrite the old model when re-running the notebook
     seed: int = 42
 
     automatic_checkpoint_naming: bool = True  # whether to automatically name the checkpoints
@@ -89,6 +89,13 @@ class TrainingConfig:
     grokfast: bool = False # whether to use the grokfast algorithm
     grokfast_alpha: float = 0.98 #Momentum hyperparmeter of the EMA.
     grokfast_lamb: float = 2.0 #Amplifying factor hyperparameter of the filter.
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        if not self.overwrite_output_dir and os.path.exists(self.output_dir):
+            raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
 
 def encode(example, sequence_key: str, id_key: str, label_key: str, pad_to_multiple_of: int, tokenizer: PreTrainedTokenizerFast):
     output = tokenizer(example[sequence_key],

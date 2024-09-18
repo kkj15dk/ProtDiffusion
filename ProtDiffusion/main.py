@@ -89,6 +89,4 @@ Trainer = VAETrainer(model,
                      test_dataloader)
 
 # %%
-import timeit
-
-print(timeit.timeit(Trainer.train_loop, number=1))
+Trainer.train_loop()

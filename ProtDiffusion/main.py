@@ -22,7 +22,7 @@ config = TrainingConfig(
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted_encoded_grouped')
+dataset = load_from_disk('/home/kaspe/ProtDiffusion/datasets/UniRef50_encoded_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
@@ -47,9 +47,9 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-train_dataloader = prepare_dataloader(config, train_dataset, num_workers=16)
-val_dataloader = prepare_dataloader(config, val_dataset, num_workers=16)
-test_dataloader = prepare_dataloader(config, test_dataset, num_workers=16)
+train_dataloader = prepare_dataloader(config, train_dataset, num_workers=12)
+val_dataloader = prepare_dataloader(config, val_dataset, num_workers=12)
+test_dataloader = prepare_dataloader(config, test_dataset, num_workers=12)
 
 # %%
 model = AutoencoderKL1D(

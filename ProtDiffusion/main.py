@@ -9,16 +9,20 @@ from New1D.autoencoder_kl_1d import AutoencoderKL1D
 import os
 
 config = TrainingConfig(
-    num_epochs=10,  # the number of epochs to train for
-    batch_size=32,
-    save_image_model_steps=100,
-    output_dir=os.path.join("output","protein-VAE-UniRef50-15-swish-conv"),  # the model name locally and on the HF Hub
+    num_epochs=1,  # the number of epochs to train for
+    batch_size=64,
+    mega_batch= 2000,
+    gradient_accumulation_steps=2,
+    learning_rate = 1e-5,
+    lr_warmup_steps = 10000,
+    save_image_model_steps=10000,
+    output_dir=os.path.join("output","protein-VAE-UniRef50_test1"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     max_len=512,
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kaspe/ProtDiffusion/datasets/UniRef50_encoded_grouped')
+dataset = load_from_disk('/work3/s204514/UniRef50_encoded_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
@@ -42,9 +46,9 @@ print(f"Validation dataset length: {len(val_dataset)}")
 print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
-train_dataloader = prepare_dataloader(config, train_dataset)
-val_dataloader = prepare_dataloader(config, val_dataset)
-test_dataloader = prepare_dataloader(config, test_dataset)
+train_dataloader = prepare_dataloader(config, train_dataset, num_workers=1)
+val_dataloader = prepare_dataloader(config, val_dataset, num_workers=1)
+test_dataloader = prepare_dataloader(config, test_dataset, num_workers=1)
 
 # %%
 model = AutoencoderKL1D(
@@ -69,7 +73,7 @@ model = AutoencoderKL1D(
     layers_per_block=2,  # how many ResNet layers to use per UNet block
     transformer_layers_per_block=1, # how many transformer layers to use per ResNet layer. Not implemented yet.
 
-    latent_channels=128,  # the dimensionality of the latent space
+    latent_channels=64,  # the dimensionality of the latent space
 
     num_attention_heads=1,  # the number of attention heads in the spatial self-attention blocks
     upsample_type="conv", # the type of upsampling to use, either 'conv' (and nearest neighbor) or 'conv_transpose'

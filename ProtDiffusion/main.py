@@ -46,9 +46,9 @@ print(f"Validation dataset length: {len(val_dataset)}")
 print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
-train_dataloader = prepare_dataloader(config, train_dataset, num_workers=1)
-val_dataloader = prepare_dataloader(config, val_dataset, num_workers=1)
-test_dataloader = prepare_dataloader(config, test_dataset, num_workers=1)
+train_dataloader = prepare_dataloader(config, train_dataset, num_workers=32)
+val_dataloader = prepare_dataloader(config, val_dataset, num_workers=32)
+test_dataloader = prepare_dataloader(config, test_dataset, num_workers=32)
 
 # %%
 model = AutoencoderKL1D(

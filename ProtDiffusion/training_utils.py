@@ -276,6 +276,8 @@ class BatchSampler(Sampler):
 
         if max_length_cap is not None:
             max_len = min(sample_max_len, max_length_cap)
+        else:
+            max_len = sample_max_len
 
         batch_size = len(batch)
         input_ids = torch.zeros(batch_size, max_len, dtype=torch.long)

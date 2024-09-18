@@ -180,7 +180,7 @@ def prepare_dataloader(config: TrainingConfig,
                         dataset: Dataset,
                         input_ids_key: str = 'input_ids',
                         drop_last: bool = False,
-                        num_workers: int = 0,
+                        num_workers: int = 1,
     ) -> DataLoader:
 
     sampler = BatchSampler(dataset,
@@ -272,14 +272,14 @@ class BatchSampler(Sampler):
                  max_length: Optional[int] = None,
                  input_ids_key: str = 'input_ids', 
                  drop_last: bool = True,
-                 num_workers: int = 0):
+                 num_workers: int = 1):
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
         self.drop_last = drop_last
         self.max_length = max_length
         self.input_ids_key = input_ids_key
         self.dataset = dataset
-        self.num_workers = num_workers + 1
+        self.num_workers = num_workers
 
     def collate_fn(self, batch):
         sample_max_len = max(item['length'] for item in batch)
@@ -334,7 +334,6 @@ class BatchSampler(Sampler):
             manager = mp.Manager()
             return_dict = manager.dict()
             processes = []
-            print(f'num_workers: {self.num_workers}')
             chunk_size = len(pool_indices) // self.num_workers
             chunks = [pool_indices[j:j + chunk_size] for j in range(0, len(pool_indices), chunk_size)]
 
@@ -349,7 +348,7 @@ class BatchSampler(Sampler):
             # Retrieve results in order
             pool_lengths = [length for process_id in sorted(return_dict.keys()) for length in return_dict[process_id]]
 
-            ## old implementation
+            # # old implementation
             # pool_lengths = [self.dataset[i]['length'] for i in pool_indices]
 
             sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths]

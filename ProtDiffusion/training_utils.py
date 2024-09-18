@@ -3,13 +3,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Sampler
+import torch.multiprocessing as mp
 
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from datasets import Dataset
 from collections import defaultdict
 
 import os
-import pickle
 import numpy as np
 
 from dataclasses import dataclass
@@ -181,7 +181,8 @@ def prepare_dataloader(config: TrainingConfig,
                             config.mega_batch,
                             max_length=config.max_len,
                             input_ids_key=input_ids_key,
-                            drop_last=drop_last
+                            drop_last=drop_last,
+                            num_workers=num_workers,
     )
     
     clustered_dataset = ClusteredDataset(dataset, 
@@ -263,13 +264,15 @@ class BatchSampler(Sampler):
                  mega_batch_size: int, 
                  max_length: Optional[int] = None,
                  input_ids_key: str = 'input_ids', 
-                 drop_last: bool = True):
+                 drop_last: bool = True,
+                 num_workers: int = 0):
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
         self.drop_last = drop_last
         self.max_length = max_length
         self.input_ids_key = input_ids_key
-        self.dataset_lengths = dataset['length']
+        self.dataset = dataset
+        self.num_workers = num_workers + 1
 
     def collate_fn(self, batch):
         sample_max_len = max(item['length'] for item in batch)
@@ -308,8 +311,11 @@ class BatchSampler(Sampler):
             'class_label': class_labels
         }
     
+    def get_lengths(self, indices, return_dict, process_id):
+        return_dict[process_id] = [self.dataset[i]['length'] for i in indices]
+
     def __iter__(self):
-        size = len(self.dataset_lengths)
+        size = len(self.dataset)
         indices = list(range(size))
         random.shuffle(indices)
 
@@ -317,7 +323,28 @@ class BatchSampler(Sampler):
         for i in range(0, size, step):
             pool_indices = indices[i:i+step]
 
-            pool_lengths = [self.dataset_lengths[i] for i in pool_indices] # list of lists of lengths
+            # Use torch.multiprocessing to get lengths
+            manager = mp.Manager()
+            return_dict = manager.dict()
+            processes = []
+            print(f'num_workers: {self.num_workers}')
+            chunk_size = len(pool_indices) // self.num_workers
+            chunks = [pool_indices[j:j + chunk_size] for j in range(0, len(pool_indices), chunk_size)]
+
+            for process_id, chunk in enumerate(chunks):
+                p = mp.Process(target=self.get_lengths, args=(chunk, return_dict, process_id))
+                p.start()
+                processes.append(p)
+
+            for p in processes:
+                p.join()
+            
+            # Retrieve results in order
+            pool_lengths = [length for process_id in sorted(return_dict.keys()) for length in return_dict[process_id]]
+
+            ## old implementation
+            # pool_lengths = [self.dataset[i]['length'] for i in pool_indices]
+
             sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths]
             pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
 
@@ -340,9 +367,9 @@ class BatchSampler(Sampler):
 
     def __len__(self):
         if self.drop_last:
-            return len(self.dataset_lengths) // self.batch_size
+            return len(self.dataset) // self.batch_size
         else:
-            return (len(self.dataset_lengths) + self.batch_size - 1) // self.batch_size
+            return (len(self.dataset) + self.batch_size - 1) // self.batch_size
 
 @dataclass
 class TrainingVariables:

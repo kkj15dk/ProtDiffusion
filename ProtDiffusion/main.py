@@ -29,7 +29,7 @@ dataset = dataset.shuffle(config.seed)
 tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
 
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.2
+train_test_split_ratio = 0.0002
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 temp_dataset = train_val_test_split['test']
@@ -89,5 +89,4 @@ Trainer = VAETrainer(model,
                      test_dataloader)
 
 # %%
-import timeit
-timeit.timeit(Trainer.train_loop, number=1)
+Trainer.train_loop()

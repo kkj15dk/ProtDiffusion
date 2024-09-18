@@ -276,6 +276,8 @@ class BatchSampler(Sampler):
 
         if max_length_cap is not None:
             max_len = min(sample_max_len, max_length_cap)
+        else:
+            max_len = sample_max_len
 
         batch_size = len(batch)
         input_ids = torch.zeros(batch_size, max_len, dtype=torch.long)
@@ -318,10 +320,9 @@ class BatchSampler(Sampler):
             pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
 
             # Zip indices with sample indices and sort by length more efficiently
-            pool = zip(pool_indices, sample_indices)
+            pool = list(zip(pool_lengths, pool_indices, sample_indices))
 
-            # Use zip directly in sorting to avoid pool_indices.index call
-            pool_sorted = [pair for pair, _ in sorted(zip(pool, pool_lengths), key=lambda x: x[1])]
+            pool_sorted = pool.sort(key=lambda x: x[0])
             
             mega_batch_indices = list(range(0, len(pool_sorted), self.batch_size))
             random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
@@ -330,8 +331,7 @@ class BatchSampler(Sampler):
                 if self.drop_last and j + self.batch_size > len(pool_sorted): # drop the last batch if it's too small
                     continue
 
-                batch = pool_sorted[j:j+self.batch_size]
-                # random.shuffle(batch) # shuffle the batch, so that the model doesn't see the same order of lengths every time. This might not be necessary.
+                batch = pool_sorted[j:j+self.batch_size][1:] # drop the length from the tuple
                 
                 yield batch
 

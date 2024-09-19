@@ -83,7 +83,7 @@ class TrainingConfig:
 
     cutoff: Optional[float] = None # cutoff for when to predict the token given the logits, and when to assign the unknown token 'X' to this position
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
-    kl_weight: float = 0.05 # the weight of the KL divergence in the loss function
+    kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
 
     weight_decay: float = 0.01 # weight decay for the optimizer
     grokfast: bool = False # whether to use the grokfast algorithm

@@ -97,6 +97,11 @@ class TrainingConfig:
         if not self.overwrite_output_dir and os.path.exists(self.output_dir):
             raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
 
+def count_parameters(model):
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model has {n_params} trainable parameters")
+    return n_params
+
 def encode(example, sequence_key: str, id_key: str, label_key: str, pad_to_multiple_of: int, tokenizer: PreTrainedTokenizerFast):
     output = tokenizer(example[sequence_key],
                         padding = True,

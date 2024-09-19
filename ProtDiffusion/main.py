@@ -1,5 +1,5 @@
 # %%
-from training_utils import TrainingConfig, prepare_dataloader, set_seed, VAETrainer
+from training_utils import TrainingConfig, prepare_dataloader, set_seed, VAETrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 
 from datasets import load_from_disk
@@ -9,27 +9,27 @@ from New1D.autoencoder_kl_1d import AutoencoderKL1D
 import os
 
 config = TrainingConfig(
-    num_epochs=5,  # the number of epochs to train for
-    batch_size=32,
-    mega_batch=100,
-    gradient_accumulation_steps=2,
+    num_epochs=2,  # the number of epochs to train for
+    batch_size=128,
+    mega_batch=1000,
+    gradient_accumulation_steps=4,
     learning_rate = 1e-5,
     lr_warmup_steps = 1000,
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_test_new"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v4-64latent"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     max_len=512,
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted_encoded_grouped')
+dataset = load_from_disk('/work3/s204514/UniRef50_encoded_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
 tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
 
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.2
+train_test_split_ratio = 0.0002
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 temp_dataset = train_val_test_split['test']
@@ -47,9 +47,11 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-train_dataloader = prepare_dataloader(config, train_dataset, num_workers=16)
-val_dataloader = prepare_dataloader(config, val_dataset, num_workers=16)
-test_dataloader = prepare_dataloader(config, test_dataset, num_workers=16)
+print("setting num_workers to 16")
+num_workers = 16
+train_dataloader = prepare_dataloader(config, train_dataset, num_workers=num_workers)
+val_dataloader = prepare_dataloader(config, val_dataset, num_workers=num_workers)
+test_dataloader = prepare_dataloader(config, test_dataset, num_workers=num_workers)
 
 # %%
 model = AutoencoderKL1D(
@@ -80,6 +82,7 @@ model = AutoencoderKL1D(
     upsample_type="conv", # the type of upsampling to use, either 'conv' (and nearest neighbor) or 'conv_transpose'
     act_fn="swish",  # the activation function to use
 )
+count_parameters(model) # Count the parameters of the model and print
 
 Trainer = VAETrainer(model, 
                      tokenizer, 
@@ -89,5 +92,4 @@ Trainer = VAETrainer(model,
                      test_dataloader)
 
 # %%
-import timeit
-timeit.timeit(Trainer.train_loop, number=1)
+Trainer.train_loop()

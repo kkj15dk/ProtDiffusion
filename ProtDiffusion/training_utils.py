@@ -83,7 +83,7 @@ class TrainingConfig:
 
     cutoff: Optional[float] = None # cutoff for when to predict the token given the logits, and when to assign the unknown token 'X' to this position
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
-    kl_weight: float = 0.05 # the weight of the KL divergence in the loss function
+    kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
 
     weight_decay: float = 0.01 # weight decay for the optimizer
     grokfast: bool = False # whether to use the grokfast algorithm
@@ -96,6 +96,11 @@ class TrainingConfig:
 
         if not self.overwrite_output_dir and os.path.exists(self.output_dir):
             raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
+
+def count_parameters(model):
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model has {n_params} trainable parameters")
+    return n_params
 
 def encode(example, sequence_key: str, id_key: str, label_key: str, pad_to_multiple_of: int, tokenizer: PreTrainedTokenizerFast):
     output = tokenizer(example[sequence_key],
@@ -330,6 +335,7 @@ class BatchSampler(Sampler):
         for i in range(0, size, step):
             pool_indices = indices[i:i+step]
 
+            # New implementation
             # Use torch.multiprocessing to get lengths
             manager = mp.Manager()
             return_dict = manager.dict()

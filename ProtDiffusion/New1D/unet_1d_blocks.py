@@ -31,8 +31,6 @@ class Downsample1D(nn.Module):
             option to use a convolution.
         out_channels (`int`, optional):
             number of output channels. Defaults to `channels`.
-        padding (`int`, default `1`):
-            padding for the convolution.
         name (`str`, default `conv`):
             name of the downsampling 1D layer.
     """

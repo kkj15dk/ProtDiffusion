@@ -47,8 +47,8 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-print("setting num_workers to 8")
-num_workers = 8
+print("setting num_workers to 16")
+num_workers = 16
 train_dataloader = prepare_dataloader(config, train_dataset, num_workers=num_workers)
 val_dataloader = prepare_dataloader(config, val_dataset, num_workers=num_workers)
 test_dataloader = prepare_dataloader(config, test_dataset, num_workers=num_workers)
@@ -92,5 +92,4 @@ Trainer = VAETrainer(model,
                      test_dataloader)
 
 # %%
-import timeit
-timeit.timeit(Trainer.train_loop, number=1)
+Trainer.train_loop()

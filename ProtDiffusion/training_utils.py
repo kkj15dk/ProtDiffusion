@@ -335,6 +335,7 @@ class BatchSampler(Sampler):
         for i in range(0, size, step):
             pool_indices = indices[i:i+step]
 
+            # New implementation
             # Use torch.multiprocessing to get lengths
             manager = mp.Manager()
             return_dict = manager.dict()

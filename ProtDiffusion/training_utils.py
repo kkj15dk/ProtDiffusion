@@ -181,7 +181,7 @@ def group_data(dataset: Dataset, chunk_size: int = 10000, output_dir: str = "gro
     grouped_dataset = Dataset.from_generator(data_generator)
     return grouped_dataset
 
-def prepare_dataloader(config: TrainingConfig,
+def make_dataloader(config: TrainingConfig,
                         dataset: Dataset,
                         input_ids_key: str = 'input_ids',
                         drop_last: bool = False,

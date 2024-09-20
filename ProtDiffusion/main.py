@@ -1,5 +1,5 @@
 # %%
-from training_utils import TrainingConfig, prepare_dataloader, set_seed, VAETrainer, count_parameters
+from training_utils import TrainingConfig, make_dataloader, set_seed, VAETrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 
 from datasets import load_from_disk
@@ -49,9 +49,9 @@ print(f"Test dataset length: {len(test_dataset)}")
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
 num_workers = 16
-train_dataloader = prepare_dataloader(config, train_dataset, num_workers=num_workers)
-val_dataloader = prepare_dataloader(config, val_dataset, num_workers=num_workers)
-test_dataloader = prepare_dataloader(config, test_dataset, num_workers=num_workers)
+train_dataloader = make_dataloader(config, train_dataset, num_workers=num_workers)
+val_dataloader = make_dataloader(config, val_dataset, num_workers=num_workers)
+test_dataloader = make_dataloader(config, test_dataset, num_workers=num_workers)
 
 # %%
 model = AutoencoderKL1D(

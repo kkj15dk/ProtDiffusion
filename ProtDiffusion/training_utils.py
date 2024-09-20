@@ -85,7 +85,7 @@ class TrainingConfig:
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
     kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
 
-    gradient_clip_val: float = 5.0  # the value to clip the gradients to
+    gradient_clip_val: Optional[float] = 5.0  # the value to clip the gradients to
     weight_decay: float = 0.01 # weight decay for the optimizer
     grokfast: bool = False # whether to use the grokfast algorithm
     grokfast_alpha: float = 0.98 #Momentum hyperparmeter of the EMA.
@@ -588,7 +588,8 @@ class VAETrainer:
                         self.training_variables.grads = gradfilter_ema(self.model, grads=self.training_variables.grads, alpha=self.config.grokfast_alpha, lamb=self.config.grokfast_lamb) 
                     
                     if self.accelerator.sync_gradients:
-                        self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
+                        if self.config.gradient_clip_val is not None:
+                            self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
                     self.optimizer.step()
                     self.lr_scheduler.step()
                     self.optimizer.zero_grad()

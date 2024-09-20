@@ -85,6 +85,7 @@ class TrainingConfig:
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
     kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
 
+    gradient_clip_val: float = 5.0  # the value to clip the gradients to
     weight_decay: float = 0.01 # weight decay for the optimizer
     grokfast: bool = False # whether to use the grokfast algorithm
     grokfast_alpha: float = 0.98 #Momentum hyperparmeter of the EMA.
@@ -585,7 +586,9 @@ class VAETrainer:
 
                     if self.config.grokfast:
                         self.training_variables.grads = gradfilter_ema(self.model, grads=self.training_variables.grads, alpha=self.config.grokfast_alpha, lamb=self.config.grokfast_lamb) 
-
+                    
+                    if self.accelerator.sync_gradients:
+                        self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
                     self.optimizer.step()
                     self.lr_scheduler.step()
                     self.optimizer.zero_grad()
@@ -603,7 +606,7 @@ class VAETrainer:
 
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs - 1:
                     self.accelerator.wait_for_everyone()
-                    self.model.eval() # Set model to eval mode to generate images
+                    self.model.eval() # Set model to eval mode to generate samples
                     logs = self.evaluate()
                     self.accelerator.log(logs, step=self.training_variables.global_step)
 

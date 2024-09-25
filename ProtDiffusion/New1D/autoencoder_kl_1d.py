@@ -131,15 +131,18 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self, x: torch.Tensor, attention_mask: torch.Tensor = None
     ) -> Union[EncoderKLOutput1D, Tuple[DiagonalGaussianDistribution1D]]:
         """
-        Encode a batch of images into latents.
+        Encode a batch of sequences into latents.
 
         Args:
-            x (`torch.Tensor`): Input batch of images.
+            x (`torch.Tensor`): Input batch of input_ids.
 
         Returns:
-                The latent representations of the encoded images. If `return_dict` is True, a
-                [`~models.autoencoder_kl.AutoencoderKLOutput`] is returned, otherwise a plain `tuple` is returned.
+                The latent representations of the encoded input_ids. A [`~vae.EncoderKLOutput1D`] is returned.
         """
+        x = self.embedding_in(x)
+        x = x.permute(0, 2, 1) # (batch_size, num_channels, seq_len)
+        x = x * attention_mask.unsqueeze(1) # (batch_size, num_channels, seq_len) * (batch_size, 1, seq_len) to set padding to 0 vectors
+
         h, attention_masks = self.encoder(x, attention_mask)
 
         if self.quant_conv is not None:
@@ -147,7 +150,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         else:
             moments = h
 
-        posterior = DiagonalGaussianDistribution1D(moments, deterministic=False)
+        posterior = DiagonalGaussianDistribution1D(moments)
 
         return EncoderKLOutput1D(latent_dist=posterior, attention_masks=attention_masks)
 
@@ -209,7 +212,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self,
         sample: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        sample_posterior: bool = True, # Should be False for inference
+        sample_posterior: bool = False, # Should be False for inference
         return_dict: bool = True,
         generator: Optional[torch.Generator] = None,
     ) -> Union[AutoencoderKLOutput1D, torch.Tensor]:
@@ -225,15 +228,11 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         """
         x = sample
 
-        x = self.embedding_in(x)
-        x = x.permute(0, 2, 1) # (batch_size, num_channels, seq_len)
-        x = x * attention_mask.unsqueeze(1) # (batch_size, num_channels, seq_len) * (batch_size, 1, seq_len) to set padding to 0 vectors
-
         output = self.encode(x, attention_mask)
         posterior = output.latent_dist
         attention_masks = output.attention_masks
 
-        if sample_posterior:
+        if self.training or sample_posterior:
             z = posterior.sample(generator=generator)
         else:
             z = posterior.mode()

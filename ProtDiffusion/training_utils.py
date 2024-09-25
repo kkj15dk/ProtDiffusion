@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Sampler
 import torch.multiprocessing as mp
+from ema_pytorch import EMA
 
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from datasets import Dataset
@@ -25,13 +26,11 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
-from grokfast import gradfilter_ema
 from tqdm import tqdm
 import json
 
 from New1D.autoencoder_kl_1d import AutoencoderKL1D
-
-import time
+from visualization_utils import make_logoplot
 
 # Set a random seed in a bunch of different places
 def set_seed(seed: int = 42) -> None:
@@ -69,6 +68,8 @@ class TrainingConfig:
     output_dir: str = os.path.join("output","test")  # the model name locally and on the HF Hub
     pad_to_multiple_of: int = 16 # should be a multiple of 2 for each layer in the VAE.
     max_len: int = 512  # truncation of the input sequence
+    max_len_start: Optional[int] = 64  # the starting length of the input sequence
+    max_len_doubling_steps: Optional[int] = 100000  # the number of steps to double the input sequence length
 
     class_embeddings_concat = False  # whether to concatenate the class embeddings to the time embeddings
 
@@ -84,12 +85,13 @@ class TrainingConfig:
     cutoff: Optional[float] = None # cutoff for when to predict the token given the logits, and when to assign the unknown token 'X' to this position
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
     kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
+    kl_warmup_steps: Optional[int] = None # the number of steps to warm up the KL divergence weight
 
     gradient_clip_val: float = 5.0  # the value to clip the gradients to
     weight_decay: float = 0.01 # weight decay for the optimizer
-    grokfast: bool = False # whether to use the grokfast algorithm
-    grokfast_alpha: float = 0.98 #Momentum hyperparmeter of the EMA.
-    grokfast_lamb: float = 2.0 #Amplifying factor hyperparameter of the filter.
+    ema_decay: float = 0.9999 # the decay rate for the EMA
+    ema_update_after: int = 1000 # the number of steps to wait before updating the EMA
+    ema_update_every: int = 1 # the number of steps to wait before updating the EMA
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -97,6 +99,18 @@ class TrainingConfig:
 
         if not self.overwrite_output_dir and os.path.exists(self.output_dir):
             raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
+        
+        if self.push_to_hub:
+            raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
+        
+        assert self.optimizer in ["AdamW", "Adam", "SGD", "Adamax"], "Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`"
+        assert self.mixed_precision in ["no", "fp16"], "Invalid mixed precision setting, choose between `no` and `fp16`" # TODO: implement fully
+        assert self.max_len % self.pad_to_multiple_of == 0, "The maximum length of the input sequence must be a multiple of the pad_to_multiple_of parameter."
+        assert self.max_len_start is None or self.max_len_start % self.pad_to_multiple_of == 0, "The starting length of the input sequence must be a multiple of the pad_to_multiple_of parameter."
+
+        if self.max_len_start is not None:
+            assert self.max_len_start <= self.max_len, "The starting length of the input sequence must be less than or equal to the maximum length of the input sequence, or None."
+
 
 def count_parameters(model):
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -184,6 +198,7 @@ def group_data(dataset: Dataset, chunk_size: int = 10000, output_dir: str = "gro
 
 def prepare_dataloader(config: TrainingConfig,
                         dataset: Dataset,
+                        max_len: int,
                         input_ids_key: str = 'input_ids',
                         drop_last: bool = False,
                         num_workers: int = 1,
@@ -192,7 +207,7 @@ def prepare_dataloader(config: TrainingConfig,
     sampler = BatchSampler(dataset,
                             config.batch_size,
                             config.mega_batch,
-                            max_length=config.max_len,
+                            max_length=max_len,
                             input_ids_key=input_ids_key,
                             drop_last=drop_last,
                             num_workers=num_workers,
@@ -384,6 +399,13 @@ class BatchSampler(Sampler):
         else:
             return (len(self.dataset) + self.batch_size - 1) // self.batch_size
 
+def logoplot_callback(pool, name):
+    def callback(result):
+        print(f"Logoplot for {name} created at {result}")
+        pool.close()
+        pool.join()
+    return callback
+
 @dataclass
 class TrainingVariables:
     Epoch: int = 0
@@ -447,47 +469,67 @@ class VAETrainer:
         )
         self.accelerator.register_for_checkpointing(self.training_variables)
 
-    def logits_to_token_ids(self, logits: torch.Tensor) -> torch.Tensor:
+    def logits_to_token_ids(self, logits: torch.Tensor, cutoff: Optional[float] = None) -> torch.Tensor:
         '''
         Convert a batch of logits to token_ids.
         Returns token_ids
         '''
-        if self.config.cutoff is None:
+        if cutoff is None:
             token_ids = logits.argmax(dim=1)
         else:
-            token_ids = torch.where(logits.max(dim=1).values > self.config.cutoff, 
+            token_ids = torch.where(logits.max(dim=1).values > cutoff, 
                                     logits.argmax(dim=1), 
                                     torch.tensor([self.tokenizer.unknown_token_id])
                                     )
         return token_ids
 
-    @torch.no_grad()
-    def evaluate(self
-    ) -> dict:
+    def update_max_len(self):
+        if self.config.max_len_start < self.config.max_len:
+            self.config.max_len_start *= 2
+            self.config.max_len_start = min(self.config.max_len_start, self.config.max_len) # To not have an int exploding to infinity in the background
+            max_len = min(self.config.max_len_start, self.config.max_len)
+            print(f"Updating max_len to {max_len}")
+            self.train_dataloader.batch_sampler.max_length = max_len
 
+    @torch.no_grad()
+    def evaluate(self,
+                 model: AutoencoderKL1D,
+    ) -> dict:
+        model.eval()
         test_dir = os.path.join(self.config.output_dir, "samples")
         os.makedirs(test_dir, exist_ok=True)
 
         running_loss = 0.0
         num_correct_residues = 0
         total_residues = 0
-        name = f"step_{self.training_variables.global_step//1000:04d}k"
+        name = f"step_{self.training_variables.global_step//1:08d}"
 
         progress_bar = tqdm(total=len(self.val_dataloader), disable=not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Evaluating {name}")
 
         for i, sample in enumerate(self.val_dataloader):
 
-            output = self.model(sample = sample['input_ids'],
+            output = model(sample = sample['input_ids'],
                                 attention_mask = sample['attention_mask'],
-                                sample_posterior = True, # Should be set to False in inference
+                                sample_posterior = False, # Should be set to False in inference. This will take the mode of the latent dist
             )
 
-            ce_loss, kl_loss = self.model.loss_fn(output, sample['input_ids'])
+            ce_loss, kl_loss = model.loss_fn(output, sample['input_ids'])
             loss = ce_loss + kl_loss * self.config.kl_weight
             running_loss += loss.item()
+            
+            if i == 0:
+                logoplot_sample = output.sample[0]
+                logoplot_sample_id = sample['id'][0]
+                print("shape", logoplot_sample.shape)
+                probs = F.softmax(logoplot_sample, dim=1).cpu().numpy()
+                pool = mp.Pool(processes=1)
+                pool.apply_async(make_logoplot, 
+                                [probs, logoplot_sample_id, f"{test_dir}/{name}_logoplot_{logoplot_sample_id}.png"], 
+                                callback=logoplot_callback(pool, name)
+                )
 
-            token_ids_pred = self.logits_to_token_ids(output.sample)
+            token_ids_pred = self.logits_to_token_ids(output.sample, cutoff=self.config.cutoff)
 
             token_ids_correct = ((sample['input_ids'] == token_ids_pred) & (sample['attention_mask'] == 1)).long()
             num_residues = torch.sum(sample['attention_mask'], dim=1).long()
@@ -523,9 +565,17 @@ class VAETrainer:
   
         # start the loop
         if self.accelerator.is_main_process:
+            self.ema = EMA(self.model, 
+                           beta = self.config.ema_decay, 
+                           update_after_step = self.config.ema_update_after,
+                           update_every = self.config.ema_update_every
+            )
+            self.ema.to(self.accelerator.device)
+            self.accelerator.register_for_checkpointing(self.ema)
+
             # Create the output directory
             if not os.path.exists(self.config.output_dir):
-                os.makedirs(self.config.output_dir, exist_ok=True)
+                os.makedirs(self.config.output_dir, exist_ok=False)
             elif not self.config.overwrite_output_dir:
                 raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
             else:
@@ -546,7 +596,6 @@ class VAETrainer:
                 starting_epoch = 0
                 self.training_variables.global_step = 0
                 self.training_variables.val_loss = float("inf")
-                self.training_variables.grads = None # Initialize the grads for the grokfast algorithm
             else:
                 self.accelerator.load_state(input_dir=from_checkpoint)
                 # Skip the first batches
@@ -581,22 +630,25 @@ class VAETrainer:
                     )
                     
                     ce_loss, kl_loss = self.model.loss_fn(output, input)
-                    loss = ce_loss + kl_loss * self.config.kl_weight
+                    
+                    kl_weight = self.config.kl_weight * min(1.0, self.training_variables.global_step / self.config.kl_warmup_steps)
+
+                    loss = ce_loss + kl_loss * kl_weight
                     self.accelerator.backward(loss)
 
-                    if self.config.grokfast:
-                        self.training_variables.grads = gradfilter_ema(self.model, grads=self.training_variables.grads, alpha=self.config.grokfast_alpha, lamb=self.config.grokfast_lamb) 
-                    
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
                     self.optimizer.step()
                     self.lr_scheduler.step()
                     self.optimizer.zero_grad()
+                    if self.accelerator.sync_gradients:
+                        self.ema.update()
 
                 progress_bar.update(1)
                 logs = {"train_loss": loss.detach().item(), 
                         "train_ce_loss": ce_loss.detach().item(), 
                         "train_kl_loss": kl_loss.detach().item(), 
+                        "kl_weight": kl_weight,
                         "lr": self.lr_scheduler.get_last_lr()[0], 
                         "step": self.training_variables.global_step,
                 }
@@ -604,10 +656,13 @@ class VAETrainer:
                 self.accelerator.log(logs, step=self.training_variables.global_step)
                 self.training_variables.global_step += 1
 
+                if self.training_variables.global_step % self.config.max_len_doubling_steps == 0:
+                    self.update_max_len()
+
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs - 1:
                     self.accelerator.wait_for_everyone()
-                    self.model.eval() # Set model to eval mode to generate samples
-                    logs = self.evaluate()
+
+                    logs = self.evaluate(self.ema.ema_model)
                     self.accelerator.log(logs, step=self.training_variables.global_step)
 
                     new_val_loss = logs["val_loss"]

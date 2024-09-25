@@ -16,7 +16,7 @@
     - sigma-VAE ??
 - U-Net
 - DiT
- - FlowMatchDiscreteEulerScheduler
+- FlowMatchDiscreteEulerScheduler
 
 # Layers
 - SelfAttention1d

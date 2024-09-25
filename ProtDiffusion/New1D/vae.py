@@ -30,17 +30,17 @@ from .unet_1d_blocks import (
 )
 
 class DiagonalGaussianDistribution1D(object):
-    def __init__(self, parameters: torch.Tensor, deterministic: bool = False):
+    def __init__(self, parameters: torch.Tensor): #, deterministic: bool = False):
         self.parameters = parameters
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
         self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
-        self.deterministic = deterministic
         self.std = torch.exp(0.5 * self.logvar)
         self.var = torch.exp(self.logvar)
-        if self.deterministic:
-            self.var = self.std = torch.zeros_like(
-                self.mean, device=self.parameters.device, dtype=self.parameters.dtype
-            )
+        # self.deterministic = deterministic
+        # if self.deterministic:
+        #     self.var = self.std = torch.zeros_like(
+        #         self.mean, device=self.parameters.device, dtype=self.parameters.dtype
+        #     )
 
     def sample(self, generator: Optional[torch.Generator] = None) -> torch.Tensor:
         # make sure sample is on the same device as the parameters and has same dtype
@@ -225,6 +225,7 @@ class Encoder1D(nn.Module):
 
         for down_block in self.down_blocks:
             sample, attention_mask = down_block(sample, attention_mask=attention_mask)
+            sample = sample * attention_mask.unsqueeze(1)
             attention_masks.append(attention_mask)
 
         # middle
@@ -366,6 +367,7 @@ class Decoder1D(nn.Module):
 
         # up
         for i, up_block in enumerate(self.up_blocks):
+            sample = sample * attention_masks[-(i + 1)].unsqueeze(1)
             sample = up_block(sample, attention_mask=attention_masks[-(i + 2)])
 
         # post-process

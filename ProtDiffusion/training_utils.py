@@ -87,7 +87,7 @@ class TrainingConfig:
     kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
     kl_warmup_steps: Optional[int] = None # the number of steps to warm up the KL divergence weight
 
-    gradient_clip_val: float = 5.0  # the value to clip the gradients to
+    gradient_clip_val: Optional[float] = 5.0  # the value to clip the gradients to
     weight_decay: float = 0.01 # weight decay for the optimizer
     ema_decay: float = 0.9999 # the decay rate for the EMA
     ema_update_after: int = 1000 # the number of steps to wait before updating the EMA
@@ -196,7 +196,7 @@ def group_data(dataset: Dataset, chunk_size: int = 10000, output_dir: str = "gro
     grouped_dataset = Dataset.from_generator(data_generator)
     return grouped_dataset
 
-def prepare_dataloader(config: TrainingConfig,
+def make_dataloader(config: TrainingConfig,
                         dataset: Dataset,
                         max_len: int,
                         input_ids_key: str = 'input_ids',
@@ -637,7 +637,8 @@ class VAETrainer:
                     self.accelerator.backward(loss)
 
                     if self.accelerator.sync_gradients:
-                        self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
+                        if self.config.gradient_clip_val is not None:
+                            self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
                     self.optimizer.step()
                     self.lr_scheduler.step()
                     self.optimizer.zero_grad()

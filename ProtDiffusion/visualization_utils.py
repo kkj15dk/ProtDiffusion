@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 
 @torch.no_grad()
-def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 50, width:int = 100, ylim:tuple = (-0.2,1.2), dpi:int = 100, characters:str = "-[]XACDEFGHIKLMNOPQRSTUVWY"):
+def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 64, width:int = 100, ylim:tuple = (-0.2,1.2), dpi:int = 100, characters:str = "-[]XACDEFGHIKLMNOPQRSTUVWY"):
     assert array.ndim == 2
 
     amino_acids = list(characters)
@@ -27,7 +27,10 @@ def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 50, w
         start = line * positions_per_line
         end = min(start + positions_per_line, num_positions)
         df = pd.DataFrame(array.T[start:end], columns=amino_acids, dtype=float)
-        logo = logomaker.Logo(df, ax=axes[line, 0])
+        logo = logomaker.Logo(df, 
+                              ax=axes[line, 0],
+                              color_scheme='chemistry',
+        )
         logo.style_spines(visible=False)
         logo.style_spines(spines=['left', 'bottom'], visible=True)
         logo.ax.set_ylabel("Probability")

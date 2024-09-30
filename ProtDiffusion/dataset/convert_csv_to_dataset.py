@@ -8,7 +8,7 @@ from transformers import PreTrainedTokenizerFast
 # %%
 # Define the parameters
 sequence_key = 'sequence'
-id_key = 'cluster90id' # This is the column to group by
+id_key = 'cluster50id' # This is the column to group by
 label_key = 'kingdomid'
 pad_to_multiple_of = 16
 output_path = '/home/kaspe/ProtDiffusion/datasets/'
@@ -77,6 +77,7 @@ def stream_groupby_gen(dataset: Dataset,
         dataset = Dataset.from_pandas(chunk.reset_index())
         for i in range(len(dataset)):
             yield dataset[i]
+
     # Don't forget the remaining orphans
     if len(orphans):
         chunk = agg(orphans)
@@ -87,13 +88,18 @@ def stream_groupby_gen(dataset: Dataset,
 # %%
 # Load the dataset
 dataset = load_dataset('csv', data_files=input_path)['train']
-tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer_new")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
+print("Tokenizer vocab", tokenizer.vocab)
 
 # %%
 dataset = dataset.rename_column(' kingdomid', 'kingdomid')
 dataset = dataset.rename_column(' sequence', 'sequence')
 dataset = dataset.rename_column(' cluster90id', 'cluster90id')
 dataset = dataset.rename_column(' cluster100id', 'cluster100id')
+
+# %%
+# filter so that only sequences with ACDEFGHIKLMNOPQRSTUVWY are included
+dataset = dataset.filter(lambda x: all(c in 'ACDEFGHIKLMNPQRSTVWY' for c in x['sequence']), num_proc=12)
 
 # %%
 # Encode the dataset
@@ -105,7 +111,9 @@ if not os.path.exists(f'{output_path}{filename_encoded}_encoded'):
                                         'pad_to_multiple_of': pad_to_multiple_of, 
                                         'tokenizer': tokenizer},
                             remove_columns=[sequence_key, label_key],
-                            batched=False)
+                            batched=False, 
+                            num_proc=8,
+    )
     dataset.save_to_disk(f'{output_path}{filename_encoded}_encoded')
 else:
     print(f"{filename_encoded} already encoded")
@@ -116,7 +124,10 @@ if not os.path.exists(f'{output_path}{filename_grouped}_encoded_grouped'):
     print(f"Grouping {filename_grouped}")
     dataset = load_from_disk(f'{output_path}{filename_encoded}_encoded')
     print("Loaded dataset, starting grouping")
-    dataset = Dataset.from_generator(stream_groupby_gen, gen_kwargs={'dataset': dataset, 'id_key': id_key})
+    dataset = Dataset.from_generator(stream_groupby_gen, 
+                                     gen_kwargs={'dataset': dataset, 'id_key': id_key},
+    )
+    print("Grouping done, saving to disk")
     dataset.save_to_disk(f'{output_path}{filename_grouped}_encoded_grouped')
 else:
     print(f"{filename_grouped} already grouped")

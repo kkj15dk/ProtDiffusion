@@ -15,17 +15,16 @@ class TrainingConfig:
     padding_side = "right"  # where to put the padding tokens in padding to multiple of.
     bos_token = "[" # beginning of sequence token
     eos_token = "]" # end of sequence token
-    unk_token = "X"  # unknown token
     pad_token = "-"
-    output_dir = "protein_tokenizer_new"  # the model name locally and on the HF Hub
+    output_dir = "protein_tokenizer"  # the model name locally and on the HF Hub
 
     push_to_hub = True  # whether to upload the saved model to the HF Hub
-    repo_id = "kkj15dk/protein_tokenizer_new"  # the name of the repository to create on the HF Hub
+    repo_id = "kkj15dk/protein_tokenizer"  # the name of the repository to create on the HF Hub
 
 config = TrainingConfig()
 
 # tokenizer for the decoder
-tokenizer = Tokenizer(WordLevel(unk_token=config.unk_token))
+tokenizer = Tokenizer(WordLevel())
 tokenizer.pre_tokenizer = Split("", behavior='removed')
 tokenizer.post_processor = TemplateProcessing(
     single=config.bos_token + " $A " + config.eos_token,
@@ -39,7 +38,6 @@ tokenizer.decoder = decoders.Fuse()
 trainer = WordLevelTrainer(special_tokens=[config.pad_token,
                                            config.bos_token,
                                            config.eos_token,
-                                           config.unk_token,
                                            ])
 
 files = ['characters.txt']
@@ -51,7 +49,6 @@ tokenizer.save("tokenizer.json")
 fast_tokenizer = PreTrainedTokenizerFast(tokenizer_file="tokenizer.json",
                                          bos_token=config.bos_token,
                                          eos_token=config.eos_token,
-                                         unk_token=config.unk_token,
                                          pad_token=config.pad_token,
                                          padding_side=config.padding_side,
                                          clean_up_tokenization_spaces=False,

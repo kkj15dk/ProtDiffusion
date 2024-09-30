@@ -520,16 +520,15 @@ class VAETrainer:
             
             if i == 0: # save the first sample each evaluation as a logoplot
                 logoplot_sample = output.sample[0]
+                logoplot_sample_len = sample['attention_mask'][0].sum().item()
+                logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
                 logoplot_sample_id = sample['id'][0]
-                logits = logoplot_sample.cpu().numpy()
                 probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
-                make_logoplot(probs, logoplot_sample_id, f"{test_dir}/{name}_probs_{logoplot_sample_id}.png")
-                make_logoplot(logits, logoplot_sample_id, f"{test_dir}/{name}_logits_{logoplot_sample_id}.png", ylim=(None, None))
-                # pool2 = mp.Pool(processes=1)
-                # pool2.apply_async(make_logoplot,
-                #                 [logits, logoplot_sample_id, f"{test_dir}/{name}_logits_{logoplot_sample_id}.png"],
-                #                 callback=logoplot_callback(pool2, name)
-                # )
+                pool = mp.Pool(processes=1)
+                pool.apply_async(make_logoplot,
+                                [probs, logoplot_sample_id, f"{test_dir}/{name}_probs_{logoplot_sample_id}.png"],
+                                callback=logoplot_callback(pool, name)
+                )
 
             token_ids_pred = self.logits_to_token_ids(output.sample, cutoff=self.config.cutoff)
 
@@ -542,7 +541,7 @@ class VAETrainer:
             # Decode the predicted sequences, and remove zero padding
             seqs_pred = self.tokenizer.batch_decode(token_ids_pred, skip_special_tokens=self.config.skip_special_tokens)
             seqs_lens = torch.sum(sample['attention_mask'], dim=1).long()
-            # seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
+            seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
             # Save all samples as a FASTA file
             seq_record_list = [SeqRecord(Seq(seq), id=str(sample['id'][i]), 

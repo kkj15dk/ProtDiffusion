@@ -1,0 +1,18 @@
+site_name: ProtDiffusion Docs
+
+theme:
+  name: material
+  shortcuts:
+    help: 191    # ?
+    next: 78     # n
+    previous: 80 # p
+    search: 83   # s
+
+plugins:
+  - mkdocstrings
+
+nav:
+  - ProtDiffusion Docs: index.md
+  - 1D Varitional autoencoder: New1D/autoencoder1d.md
+  - Encoder and Decoder: New1D/vae.md
+  - 1D blocks: New1D/unet_1d_blocks.md

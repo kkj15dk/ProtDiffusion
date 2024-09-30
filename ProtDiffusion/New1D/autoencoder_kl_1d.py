@@ -39,8 +39,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     for all models (such as downloading or saving).
 
     Parameters:
-        in_channels (int, *optional*, defaults to 3): Number of channels in the input image.
-        out_channels (int,  *optional*, defaults to 3): Number of channels in the output.
+        num_class_embeddings (int, *optional*, defaults to 3): Number of class embeddings in the input.
         down_block_types (`Tuple[str]`, *optional*, defaults to `("DownEncoderBlock2D",)`):
             Tuple of downsample block types.
         up_block_types (`Tuple[str]`, *optional*, defaults to `("UpDecoderBlock2D",)`):
@@ -49,18 +48,6 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             Tuple of block output channels.
         act_fn (`str`, *optional*, defaults to `"silu"`): The activation function to use.
         latent_channels (`int`, *optional*, defaults to 4): Number of channels in the latent space.
-        sample_size (`int`, *optional*, defaults to `32`): Sample input size.
-        scaling_factor (`float`, *optional*, defaults to 0.18215):
-            The component-wise standard deviation of the trained latent space computed using the first batch of the
-            training set. This is used to scale the latent space to have unit variance when training the diffusion
-            model. The latents are scaled with the formula `z = z * scaling_factor` before being passed to the
-            diffusion model. When decoding, the latents are scaled back to the original scale with the formula: `z = 1
-            / scaling_factor * z`. For more details, refer to sections 4.3.2 and D.1 of the [High-Resolution Image
-            Synthesis with Latent Diffusion Models](https://arxiv.org/abs/2112.10752) paper.
-        force_upcast (`bool`, *optional*, default to `True`):
-            If enabled it will force the VAE to run in float32 for high image resolution pipelines, such as SD-XL. VAE
-            can be fine-tuned / trained to a lower range without loosing too much precision in which case
-            `force_upcast` can be set to `False` - see: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix
     """
 
     _supports_gradient_checkpointing = True
@@ -144,17 +131,18 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self, x: torch.Tensor, attention_mask: torch.Tensor = None
     ) -> Union[EncoderKLOutput1D, Tuple[DiagonalGaussianDistribution1D]]:
         """
-        Encode a batch of images into latents.
+        Encode a batch of sequences into latents.
 
         Args:
-            x (`torch.Tensor`): Input batch of images.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether to return a [`~models.autoencoder_kl.AutoencoderKLOutput`] instead of a plain tuple.
+            x (`torch.Tensor`): Input batch of input_ids.
 
         Returns:
-                The latent representations of the encoded images. If `return_dict` is True, a
-                [`~models.autoencoder_kl.AutoencoderKLOutput`] is returned, otherwise a plain `tuple` is returned.
+                The latent representations of the encoded input_ids. A [`~vae.EncoderKLOutput1D`] is returned.
         """
+        x = self.embedding_in(x)
+        x = x.permute(0, 2, 1) # (batch_size, num_channels, seq_len)
+        x = x * attention_mask.unsqueeze(1) # (batch_size, num_channels, seq_len) * (batch_size, 1, seq_len) to set padding to 0 vectors
+
         h, attention_masks = self.encoder(x, attention_mask)
 
         if self.quant_conv is not None:
@@ -162,7 +150,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         else:
             moments = h
 
-        posterior = DiagonalGaussianDistribution1D(moments, deterministic=False)
+        posterior = DiagonalGaussianDistribution1D(moments)
 
         return EncoderKLOutput1D(latent_dist=posterior, attention_masks=attention_masks)
 
@@ -224,7 +212,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self,
         sample: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        sample_posterior: bool = True, # Should be False for inference
+        sample_posterior: bool = False, # Should be False for inference
         return_dict: bool = True,
         generator: Optional[torch.Generator] = None,
     ) -> Union[AutoencoderKLOutput1D, torch.Tensor]:
@@ -240,15 +228,11 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         """
         x = sample
 
-        x = self.embedding_in(x)
-        x = x.permute(0, 2, 1) # (batch_size, num_channels, seq_len)
-        x = x * attention_mask.unsqueeze(1) # (batch_size, num_channels, seq_len) * (batch_size, 1, seq_len) to set padding to 0 vectors
-
         output = self.encode(x, attention_mask)
         posterior = output.latent_dist
         attention_masks = output.attention_masks
 
-        if sample_posterior:
+        if self.training or sample_posterior:
             z = posterior.sample(generator=generator)
         else:
             z = posterior.mode()

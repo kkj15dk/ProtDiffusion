@@ -66,8 +66,8 @@ def encode(example):
                     return_attention_mask=True, # We need to attend to padding tokens, so we set this to False
 )
 
-example = {'text': 'ACDEFGHIKLMNOPQRSTUVWY'}
+example = {'text': 'ACDEFGHIKLMNPQRSTVWY'}
 encoded = encode(example)
 print(encoded)
 
-fast_tokenizer.push_to_hub(config.repo_id)
+# fast_tokenizer.push_to_hub(config.repo_id)

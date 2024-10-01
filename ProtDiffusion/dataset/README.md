@@ -11,3 +11,7 @@ This sorts the file, ignoring the header, and deletes duplicates.
 3.
 The dataset is then encoded using the script convert_csv_to_dataset.py. This script both creates an encoded dataset, and then afterwards creates a grouped dataset, grouped by the clusterid. They are saved to disk as huggingface Datasets.
 The grouped dataset is the final one used for the model.
+
+## Upload to HPC
+
+rsync -avPh datasets/UniRef50_encoded_grouped s204514@transfer.gbar.dtu.dk:/work3/s204514

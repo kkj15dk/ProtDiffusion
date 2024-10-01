@@ -10,20 +10,20 @@ import os
 
 
 config = TrainingConfig(
-    num_epochs=200,  # the number of epochs to train for
+    num_epochs=5000,  # the number of epochs to train for
     batch_size=16,
     mega_batch=1000,
     gradient_accumulation_steps=2,
     learning_rate = 1e-4,
     lr_warmup_steps = 1000,
     kl_warmup_steps = 10000,
-    save_image_model_steps=1000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v1.0"),  # the model name locally and on the HF Hub
+    save_image_model_steps=2000,
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v3.1"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     gradient_clip_val=5.0,
     max_len=32768,
     max_len_start=512,
-    max_len_doubling_steps=50,
+    max_len_doubling_steps=1000,
     ema_decay=0.9999,
     ema_update_after=1000,
     ema_update_every=10,
@@ -55,17 +55,20 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-print("setting num_workers to 16")
-num_workers = 12
+print("setting num_workers to 12")
+num_workers = 16
 train_dataloader = make_dataloader(config, train_dataset, 
                                       max_len=config.max_len_start, 
-                                      num_workers=num_workers)
+                                      num_workers=num_workers,
+)
 val_dataloader = make_dataloader(config, val_dataset, 
                                     max_len=config.max_len, 
-                                    num_workers=num_workers)
+                                    num_workers=1,
+)
 test_dataloader = make_dataloader(config, test_dataset,
                                       max_len=config.max_len, 
-                                      num_workers=num_workers)
+                                      num_workers=1,
+)
 
 # %%
 model = AutoencoderKL1D(
@@ -103,7 +106,9 @@ Trainer = VAETrainer(model,
                      train_dataloader, 
                      val_dataloader, 
                      config, 
-                     test_dataloader)
+                     test_dataloader,
+)
 
 # %%
-Trainer.train_loop()
+if __name__ == '__main__':
+    Trainer.train_loop(from_checkpoint='/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v3.0/checkpoints/checkpoint_18')

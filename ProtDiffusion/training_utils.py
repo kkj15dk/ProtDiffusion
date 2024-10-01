@@ -12,6 +12,7 @@ from collections import defaultdict
 
 import os
 import numpy as np
+import gc
 
 from dataclasses import dataclass
 from typing import Optional, Union, List
@@ -31,6 +32,8 @@ import json
 
 from New1D.autoencoder_kl_1d import AutoencoderKL1D
 from visualization_utils import make_logoplot
+
+from memory_profiler import profile
 
 # Set a random seed in a bunch of different places
 def set_seed(seed: int = 42) -> None:
@@ -399,13 +402,6 @@ class BatchSampler(Sampler):
         else:
             return (len(self.dataset) + self.batch_size - 1) // self.batch_size
 
-def logoplot_callback(pool, name):
-    def callback(result):
-        print(f"Logoplot for {name} created at {result}")
-        pool.close()
-        pool.join()
-    return callback
-
 @dataclass
 class TrainingVariables:
     Epoch: int = 0
@@ -518,17 +514,20 @@ class VAETrainer:
             loss = ce_loss + kl_loss * self.config.kl_weight
             running_loss += loss.item()
             
-            if i == 0: # save the first sample each evaluation as a logoplot
+            if i == 0 and self.accelerator.is_main_process: # save the first sample each evaluation as a logoplot
                 logoplot_sample = output.sample[0]
                 logoplot_sample_len = sample['attention_mask'][0].sum().item()
                 logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
                 logoplot_sample_id = sample['id'][0]
                 probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
-                pool = mp.Pool(processes=1)
-                pool.apply_async(make_logoplot,
-                                [probs, logoplot_sample_id, f"{test_dir}/{name}_probs_{logoplot_sample_id}.png"],
-                                callback=logoplot_callback(pool, name)
+                pool = mp.Pool(1)
+                pool.apply_async(make_logoplot, 
+                                args=(probs, logoplot_sample_id, f"{test_dir}/{name}_probs_{logoplot_sample_id}.png"),
+                                error_callback=lambda e: print(e),
+                                callback=lambda _: pool.close(),
                 )
+                print(f"Active processes: {len(mp.active_children())}")
+                gc.collect()
 
             token_ids_pred = self.logits_to_token_ids(output.sample, cutoff=self.config.cutoff)
 
@@ -560,10 +559,11 @@ class VAETrainer:
                 "val_kl_loss": kl_loss.detach().item(),
                 "val_acc": acc,
                 }
+        gc.collect()
         return logs
-    
+
     def train_loop(self, from_checkpoint: Optional[Union[str, os.PathLike]] = None):
-  
+
         # start the loop
         if self.accelerator.is_main_process:
             self.ema = EMA(self.model, 

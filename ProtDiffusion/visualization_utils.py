@@ -1,3 +1,4 @@
+# %%
 import torch
 import os
 import gc
@@ -6,9 +7,26 @@ import pandas as pd
 import logomaker
 import matplotlib.pyplot as plt
 
+from logomaker.src.colors import get_color_dict
 
+# %%
+def make_color_dict(color_scheme:str = 'weblogo_protein', cs:str = "-[]XACDEFGHIKLMNOPQRSTUVWY"):
+    # get list of characters
+    cs1 = np.array([c for c in list('ACDEFGHIKLMNPQRSTVWY')])
+    cs2 = np.array([c for c in list(cs)])
+    # get color dictionary
+    rgb_dict = get_color_dict(color_scheme, cs1)
+
+    # add missing characters to color dictionary
+    for c in cs2:
+        if c not in rgb_dict:
+            rgb_dict[c.upper()] = np.array([0.5, 0.5, 0.5])
+            rgb_dict[c.lower()] = np.array([0.5, 0.5, 0.5])
+
+    return rgb_dict
+# %%
 @torch.no_grad()
-def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 64, width:int = 100, ylim:tuple = (-0.2,1.2), dpi:int = 100, characters:str = "-[]XACDEFGHIKLMNOPQRSTUVWY"):
+def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 100, characters:str = "-[]XACDEFGHIKLMNOPQRSTUVWY"):
     assert array.ndim == 2
 
     amino_acids = list(characters)
@@ -26,11 +44,14 @@ def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 64, w
     for line in range(num_lines):
         start = line * positions_per_line
         end = min(start + positions_per_line, num_positions)
+        
         df = pd.DataFrame(array.T[start:end], columns=amino_acids, dtype=float)
+        
         logo = logomaker.Logo(df, 
                               ax=axes[line, 0],
-                              color_scheme='chemistry',
+                              color_scheme=make_color_dict(),
         )
+        
         logo.style_spines(visible=False)
         logo.style_spines(spines=['left', 'bottom'], visible=True)
         logo.ax.set_ylabel("Probability")

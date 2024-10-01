@@ -411,7 +411,7 @@ class TrainingVariables:
     Epoch: int = 0
     global_step: int = 0
     val_loss: float = float("inf")
-    grads: Optional[torch.Tensor] = None
+    max_len_start: int = 0
 
     def state_dict(self):
         return self.__dict__
@@ -484,10 +484,10 @@ class VAETrainer:
         return token_ids
 
     def update_max_len(self):
-        if self.config.max_len_start < self.config.max_len:
-            self.config.max_len_start *= 2
-            self.config.max_len_start = min(self.config.max_len_start, self.config.max_len) # To not have an int exploding to infinity in the background
-            max_len = min(self.config.max_len_start, self.config.max_len)
+        if self.training_variables.max_len_start < self.config.max_len:
+            self.training_variables.max_len_start *= 2
+            self.training_variables.max_len_start = min(self.training_variables.max_len_start, self.config.max_len) # To not have an int exploding to infinity in the background
+            max_len = min(self.training_variables.max_len_start, self.config.max_len)
             print(f"Updating max_len to {max_len}")
             self.train_dataloader.batch_sampler.max_length = max_len
 
@@ -518,14 +518,15 @@ class VAETrainer:
             loss = ce_loss + kl_loss * self.config.kl_weight
             running_loss += loss.item()
             
-            if i == 0:
+            if i == 0: # save the first sample each evaluation as a logoplot
                 logoplot_sample = output.sample[0]
+                logoplot_sample_len = sample['attention_mask'][0].sum().item()
+                logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
                 logoplot_sample_id = sample['id'][0]
-                print("shape", logoplot_sample.shape)
-                probs = F.softmax(logoplot_sample, dim=1).cpu().numpy()
+                probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
                 pool = mp.Pool(processes=1)
-                pool.apply_async(make_logoplot, 
-                                [probs, logoplot_sample_id, f"{test_dir}/{name}_logoplot_{logoplot_sample_id}.png"], 
+                pool.apply_async(make_logoplot,
+                                [probs, logoplot_sample_id, f"{test_dir}/{name}_probs_{logoplot_sample_id}.png"],
                                 callback=logoplot_callback(pool, name)
                 )
 
@@ -596,6 +597,7 @@ class VAETrainer:
                 starting_epoch = 0
                 self.training_variables.global_step = 0
                 self.training_variables.val_loss = float("inf")
+                self.training_variables.max_len_start = self.config.max_len_start
             else:
                 self.accelerator.load_state(input_dir=from_checkpoint)
                 # Skip the first batches
@@ -603,8 +605,11 @@ class VAETrainer:
                 batches_to_skip = self.training_variables.global_step % len(self.train_dataloader)
                 skipped_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, batches_to_skip)
                 print(f"Loaded checkpoint from {from_checkpoint}")
+                print(f"Starting from epoch {starting_epoch}")
                 print(f"Starting from step {self.training_variables.global_step}")
-                print(f"Validation loss: {self.training_variables.val_loss}")
+                print(f"Skipping {batches_to_skip} batches (randomly)")
+                print(f"Current validation loss: {self.training_variables.val_loss}")
+                print(f"Current max length: {self.training_variables.max_len_start}")
 
         # Now you train the model
         self.model.train()

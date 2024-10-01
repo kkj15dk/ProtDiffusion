@@ -18,10 +18,10 @@ config = TrainingConfig(
     lr_warmup_steps = 1000,
     kl_warmup_steps = 10000,
     save_image_model_steps=1000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v11"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v1.0"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5,  # the maximum number of checkpoints to keep
     gradient_clip_val=5.0,
-    max_len=8192,
+    max_len=32768,
     max_len_start=512,
     max_len_doubling_steps=50,
     ema_decay=0.9999,
@@ -34,7 +34,7 @@ dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sor
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v1.2.json")
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.2
@@ -56,7 +56,7 @@ print(f"Test dataset length: {len(test_dataset)}")
 # %%
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
-num_workers = 16
+num_workers = 12
 train_dataloader = make_dataloader(config, train_dataset, 
                                       max_len=config.max_len_start, 
                                       num_workers=num_workers)

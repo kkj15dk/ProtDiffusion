@@ -541,7 +541,6 @@ class VAETrainer:
                                 error_callback=lambda e: print(e),
                                 callback=lambda _: pool.close(),
                 )
-                print(f"Active processes: {len(mp.active_children())}")
                 gc.collect()
 
             token_ids_pred = self.logits_to_token_ids(output.sample, cutoff=self.config.cutoff)
@@ -686,7 +685,7 @@ class VAETrainer:
                 if self.training_variables.global_step % self.config.max_len_doubling_steps == 0:
                     self.update_max_len()
 
-                if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs - 1:
+                if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
                     self.accelerator.wait_for_everyone()
                     
                     logs = self.evaluate(self.ema.ema_model)
@@ -696,10 +695,17 @@ class VAETrainer:
 
                     if new_val_loss < self.training_variables.val_loss: # Save the model if the validation loss is lower
                         self.training_variables.val_loss = new_val_loss
-                        self.accelerator.save_state(
-                            output_dir=self.config.output_dir,
-                        )
+                        self.accelerator.save_state()
                     self.model.train() # Make sure the model is in train mode
+                
+                if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
+                    self.accelerator_config.automatic_checkpoint_naming = False
+                    self.accelerator.save_state(
+                            output_dir=os.path.join(self.config.output_dir, f"Epoch_{epoch}")
+                        )
+                    self.accelerator_config.automatic_checkpoint_naming = True
+
+
         self.accelerator.end_training()
 
 # %%

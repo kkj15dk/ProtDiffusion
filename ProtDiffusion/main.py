@@ -13,18 +13,18 @@ config = TrainingConfig(
     batch_size=64,
     mega_batch=1000,
     gradient_accumulation_steps=16,
-    learning_rate = 2e-5,
-    lr_warmup_steps = 1000,
-    kl_warmup_steps = 1000,
+    learning_rate=8e-5,
+    lr_warmup_steps=1000,
+    kl_warmup_steps=2000,
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v7.0"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v8.0"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
-    gradient_clip_val=5.0,
+    gradient_clip_val=1.0,
     max_len=32768, # 512 * 2**6
-    max_len_start=4096,
+    max_len_start=32768,
     max_len_doubling_steps=10000,
     ema_decay=0.9999,
-    ema_update_after=5000,
+    ema_update_after=3000,
     ema_update_every=10,
 )
 set_seed(config.seed) # Set the random seed for reproducibility

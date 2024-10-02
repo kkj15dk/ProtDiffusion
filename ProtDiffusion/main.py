@@ -9,34 +9,34 @@ from New1D.autoencoder_kl_1d import AutoencoderKL1D
 import os
 
 config = TrainingConfig(
-    num_epochs=2,  # the number of epochs to train for
+    num_epochs=2000,  # the number of epochs to train for
     batch_size=64,
     mega_batch=1000,
     gradient_accumulation_steps=16,
-    learning_rate=8e-5,
-    lr_warmup_steps=1000,
-    kl_warmup_steps=2000,
-    save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v8.0"),  # the model name locally and on the HF Hub
+    learning_rate = 1e-4,
+    lr_warmup_steps = 100,
+    kl_warmup_steps = 100,
+    save_image_model_steps=100,
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v7.0"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=32768, # 512 * 2**6
-    max_len_start=32768,
-    max_len_doubling_steps=10000,
+    max_len_start=4096,
+    max_len_doubling_steps=100,
     ema_decay=0.9999,
-    ema_update_after=3000,
+    ema_update_after=100,
     ema_update_every=10,
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/work3/s204514/UniRef50_encoded_grouped')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted_encoded_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v1.2.json")
 
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.0002
+train_test_split_ratio = 0.2
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 temp_dataset = train_val_test_split['test']

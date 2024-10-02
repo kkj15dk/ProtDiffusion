@@ -195,29 +195,15 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self,
         output: AutoencoderKLOutput1D, 
         input_ids: torch.Tensor,
-        sequence_length_reduction: str = 'mean' # Reduction along the L dimension. 'sum' has been implemented to be able to do gradient accumulation and afterwards scale the gradients. https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         
         ce_loss = nn.functional.cross_entropy(output.sample, input_ids, reduction='none') # B, L
         ce_loss = ce_loss * output.attention_masks[0] # B, L
-
-        if sequence_length_reduction == 'mean':
-            ce_loss = torch.sum(ce_loss) / output.attention_masks[0].sum()
-        elif sequence_length_reduction == 'sum':
-            ce_loss = torch.sum(ce_loss)
-        else:
-            raise NotImplementedError(f'Reduction "{sequence_length_reduction}" not implemented, choose between "sum" and "mean"')
-
+        ce_loss = torch.sum(ce_loss) / output.attention_masks[0].sum()
         
         kl_loss = output.latent_dist.kl()
-        kl_loss = kl_loss * output.attention_masks[-1]
-
-        if sequence_length_reduction == 'mean':
-            kl_loss = torch.sum(kl_loss) / output.attention_masks[-1].sum()
-        elif sequence_length_reduction == 'sum':
-            kl_loss = torch.sum(kl_loss)
-        else:
-            raise NotImplementedError(f'Reduction "{sequence_length_reduction}" not implemented, choose between "sum" and "mean"')
+        kl_loss = kl_loss * output.attention_masks[-1] # B, L
+        kl_loss = torch.sum(kl_loss) / output.attention_masks[-1].sum()
 
         return ce_loss, kl_loss
 

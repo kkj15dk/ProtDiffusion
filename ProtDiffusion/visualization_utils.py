@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import logomaker
 import matplotlib.pyplot as plt
-import time
 
 from logomaker.src.colors import get_color_dict
 
@@ -28,8 +27,7 @@ def make_color_dict(color_scheme:str = 'weblogo_protein', cs:str = "-[]ACDEFGHIK
 
 # %%
 @torch.no_grad()
-def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 100, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY"):
-    start_time = time.time()
+def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY", positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 100):
     assert array.ndim == 2
 
     amino_acids = list(characters)
@@ -71,8 +69,6 @@ def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 60, w
 
     gc.collect()  # Force garbage collection
 
-    end_time = time.time()
     print(f'Finished making logoplot for {label}')
-    print(f'Time taken: {end_time - start_time:.2f} seconds')
 
     return

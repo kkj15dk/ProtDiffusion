@@ -532,7 +532,12 @@ class VAETrainer:
                 probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
                 pool = mp.Pool(1)
                 pool.apply_async(make_logoplot, 
-                                args=(probs, logoplot_sample_id, f"{test_dir}/{name}_probs_{logoplot_sample_id}.png"),
+                                args=(
+                                    probs, 
+                                    logoplot_sample_id, 
+                                    f"{test_dir}/{name}_probs_{logoplot_sample_id}.png", 
+                                    self.tokenizer.decode(range(self.tokenizer.vocab_size)),
+                                ),
                                 error_callback=lambda e: print(e),
                                 callback=lambda _: pool.close(),
                 )
@@ -646,13 +651,14 @@ class VAETrainer:
                                     sample_posterior = True, # Should be set to true in training
                     )
                     
-                    ce_loss, kl_loss = self.model.loss_fn(output, input, sequence_length_reduction = 'sum') # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
-                    kl_loss = kl_loss * self.config.pad_to_multiple_of # When using sum, scale the kl_loss appropriately. It will be divided by n_tokens when the gradients are scaled. There is a factor of pad_to_multiple_of fewer tokens in the latent dimension
+                    ce_loss, kl_loss = self.model.loss_fn(output, input) 
 
                     kl_weight = self.config.kl_weight * min(1.0, self.training_variables.global_step / (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
 
                     loss = ce_loss + kl_loss * kl_weight
-                    self.accelerator.backward(loss)
+                    loss_back = loss * attention_mask.sum() # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
+
+                    self.accelerator.backward(loss_back)
 
                     if self.accelerator.sync_gradients:
                         self.scale_gradients(self.model, n_tokens)

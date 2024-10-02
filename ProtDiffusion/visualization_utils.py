@@ -11,7 +11,7 @@ import time
 from logomaker.src.colors import get_color_dict
 
 # %%
-def make_color_dict(color_scheme:str = 'weblogo_protein', cs:str = "-[]XACDEFGHIKLMNOPQRSTUVWY"):
+def make_color_dict(color_scheme:str = 'weblogo_protein', cs:str = "-[]ACDEFGHIKLMNPQRSTVWY"):
     # get list of characters
     cs1 = np.array([c for c in list('ACDEFGHIKLMNPQRSTVWY')])
     cs2 = np.array([c for c in list(cs)])
@@ -28,7 +28,7 @@ def make_color_dict(color_scheme:str = 'weblogo_protein', cs:str = "-[]XACDEFGHI
 
 # %%
 @torch.no_grad()
-def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 100, characters:str = "-[]XACDEFGHIKLMNOPQRSTUVWY"):
+def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 100, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY"):
     start_time = time.time()
     assert array.ndim == 2
 
@@ -53,7 +53,7 @@ def make_logoplot(array, label:str, png_path:str, positions_per_line:int = 60, w
         
         logo = logomaker.Logo(df, 
                               ax=axes[line, 0],
-                              color_scheme=make_color_dict(),
+                              color_scheme=make_color_dict(cs=characters),
         )
         
         logo.style_spines(visible=False)

@@ -33,8 +33,6 @@ import json
 from New1D.autoencoder_kl_1d import AutoencoderKL1D
 from visualization_utils import make_logoplot
 
-from memory_profiler import profile
-
 # Set a random seed in a bunch of different places
 def set_seed(seed: int = 42) -> None:
     """
@@ -487,6 +485,18 @@ class VAETrainer:
             print(f"Updating max_len to {max_len}")
             self.train_dataloader.batch_sampler.max_length = max_len
 
+    def scale_gradients(self, 
+                        m: nn.Module, 
+                        n_tokens: int = 1, 
+    ):
+        '''
+        Scale the gradients by dividing by the amount of tokens
+        '''
+
+        for n, p in m.named_parameters():
+            if p.requires_grad and p.grad is not None:
+                p.grad.data = p.grad.data / n_tokens
+
     @torch.no_grad()
     def evaluate(self,
                  model: AutoencoderKL1D,
@@ -500,7 +510,7 @@ class VAETrainer:
         total_residues = 0
         name = f"step_{self.training_variables.global_step//1:08d}"
 
-        progress_bar = tqdm(total=len(self.val_dataloader), disable=not self.accelerator.is_local_main_process)
+        progress_bar = tqdm(total=len(self.val_dataloader), disable=True) # not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Evaluating {name}")
 
         for i, sample in enumerate(self.val_dataloader):
@@ -613,6 +623,7 @@ class VAETrainer:
 
         # Now you train the model
         self.model.train()
+        n_tokens = 0
         for epoch in range(starting_epoch, self.config.num_epochs):
 
             if epoch == starting_epoch:
@@ -620,7 +631,7 @@ class VAETrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable=True) # not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
@@ -628,20 +639,24 @@ class VAETrainer:
                 with self.accelerator.accumulate(self.model):
                     input = batch['input_ids']
                     attention_mask = batch['attention_mask']
+                    n_tokens += attention_mask.sum()
                     # Predict the noise residual
                     output = self.model(sample = input,
                                     attention_mask = attention_mask,
                                     sample_posterior = True, # Should be set to true in training
                     )
                     
-                    ce_loss, kl_loss = self.model.loss_fn(output, input)
-                    
-                    kl_weight = self.config.kl_weight * min(1.0, self.training_variables.global_step / self.config.kl_warmup_steps)
+                    ce_loss, kl_loss = self.model.loss_fn(output, input, sequence_length_reduction = 'sum') # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
+                    kl_loss = kl_loss * self.config.pad_to_multiple_of # When using sum, scale the kl_loss appropriately. It will be divided by n_tokens when the gradients are scaled. There is a factor of pad_to_multiple_of fewer tokens in the latent dimension
+
+                    kl_weight = self.config.kl_weight * min(1.0, self.training_variables.global_step / (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
 
                     loss = ce_loss + kl_loss * kl_weight
                     self.accelerator.backward(loss)
 
                     if self.accelerator.sync_gradients:
+                        self.scale_gradients(self.model, n_tokens)
+                        n_tokens = 0
                         if self.config.gradient_clip_val is not None:
                             self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
                     self.optimizer.step()
@@ -667,7 +682,7 @@ class VAETrainer:
 
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs - 1:
                     self.accelerator.wait_for_everyone()
-
+                    
                     logs = self.evaluate(self.ema.ema_model)
                     self.accelerator.log(logs, step=self.training_variables.global_step)
 
@@ -678,7 +693,7 @@ class VAETrainer:
                         self.accelerator.save_state(
                             output_dir=self.config.output_dir,
                         )
-                    self.model.train() # Set model back to train mode
+                    self.model.train() # Make sure the model is in train mode
         self.accelerator.end_training()
 
 # %%

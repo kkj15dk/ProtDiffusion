@@ -62,7 +62,7 @@ class DiagonalGaussianDistribution1D(object):
         return 0.5 * torch.mean(
             torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar,
             dim = 1
-        )
+        ) # B, L
 
     def mode(self) -> torch.Tensor:
         return self.mean

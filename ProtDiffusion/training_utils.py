@@ -506,15 +506,17 @@ class VAETrainer:
         os.makedirs(test_dir, exist_ok=True)
 
         running_loss = 0.0
+        running_loss_ce = 0.0
+        running_loss_kl = 0.0
         num_correct_residues = 0
         total_residues = 0
         name = f"step_{self.training_variables.global_step//1:08d}"
 
-        progress_bar = tqdm(total=len(self.val_dataloader), disable=True) # not self.accelerator.is_local_main_process)
+        progress_bar = tqdm(total=len(self.val_dataloader), disable=True) #not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Evaluating {name}")
 
         for i, sample in enumerate(self.val_dataloader):
-
+            
             output = model(sample = sample['input_ids'],
                                 attention_mask = sample['attention_mask'],
                                 sample_posterior = False, # Should be set to False in inference. This will take the mode of the latent dist
@@ -522,6 +524,8 @@ class VAETrainer:
 
             ce_loss, kl_loss = model.loss_fn(output, sample['input_ids'])
             loss = ce_loss + kl_loss * self.config.kl_weight
+            running_loss_ce += ce_loss.item()
+            running_loss_kl += kl_loss.item()
             running_loss += loss.item()
             
             if i == 0 and self.accelerator.is_main_process: # save the first sample each evaluation as a logoplot
@@ -567,10 +571,13 @@ class VAETrainer:
             progress_bar.update(1)
         
         acc = num_correct_residues / total_residues
-        print(f"{name}, val_loss: {running_loss / len(self.val_dataloader):.4f}, val_accuracy: {acc:.4f}")
-        logs = {"val_loss": loss.detach().item(), 
-                "val_ce_loss": ce_loss.detach().item(), 
-                "val_kl_loss": kl_loss.detach().item(),
+        loss_log = running_loss / len(self.val_dataloader)
+        loss_log_ce = running_loss_ce / len(self.val_dataloader)
+        loss_log_kl = running_loss_kl / len(self.val_dataloader)
+        print(f"{name}, val_loss: {loss_log:.4f}, val_accuracy: {acc:.6f}")
+        logs = {"val_loss": loss_log.detach().item(), 
+                "val_ce_loss": loss_log_ce.detach().item(), 
+                "val_kl_loss": loss_log_kl.detach().item(),
                 "val_acc": acc,
                 }
         gc.collect()
@@ -635,16 +642,16 @@ class VAETrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable=True) # not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable=True) #not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
-                
+                6
                 with self.accelerator.accumulate(self.model):
                     input = batch['input_ids']
                     attention_mask = batch['attention_mask']
                     n_tokens += attention_mask.sum()
-                    # Predict the noise residual
+                    
                     output = self.model(sample = input,
                                     attention_mask = attention_mask,
                                     sample_posterior = True, # Should be set to true in training

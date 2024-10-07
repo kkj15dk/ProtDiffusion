@@ -27,7 +27,7 @@ def make_color_dict(color_scheme:str = 'weblogo_protein', cs:str = "-[]ACDEFGHIK
 
 # %%
 @torch.no_grad()
-def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY", positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 100):
+def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY", positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 50):
     assert array.ndim == 2
 
     amino_acids = list(characters)
@@ -35,8 +35,6 @@ def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIK
     if os.path.exists(png_path): # If the file already exists, skip making the logoplot
         print(f"File already exists: {png_path}")
         return
-    else:
-        print(f'Started making logoplot for {label}')
 
     num_positions = array.shape[1]
     num_lines = (num_positions + positions_per_line - 1) // positions_per_line
@@ -68,7 +66,5 @@ def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIK
     plt.close(fig)
 
     gc.collect()  # Force garbage collection
-
-    print(f'Finished making logoplot for {label}')
 
     return

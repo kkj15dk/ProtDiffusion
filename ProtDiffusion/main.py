@@ -9,24 +9,25 @@ from New1D.autoencoder_kl_1d import AutoencoderKL1D
 import os
 
 config = TrainingConfig(
-    num_epochs=2,  # the number of epochs to train for
-    batch_size=64,
+    num_epochs=5,  # the number of epochs to train for
+    batch_size=24, # 24 seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
     mega_batch=1000,
     gradient_accumulation_steps=16,
-    learning_rate=8e-5,
+    learning_rate=1e-5,
     lr_warmup_steps=1000,
     kl_warmup_steps=2000,
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v8.0"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v8.4"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
-    max_len=32768, # 512 * 2**6
-    max_len_start=32768,
+    max_len=16384, # 512 * 2**5
+    max_len_start=16384,
     max_len_doubling_steps=10000,
     ema_decay=0.9999,
     ema_update_after=3000,
     ema_update_every=10,
 )
+print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
 dataset = load_from_disk('/work3/s204514/UniRef50_encoded_grouped')
@@ -110,4 +111,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train_loop()
+    Trainer.train_loop(from_checkpoint='/zhome/fb/0/155603/output/protein-VAE-UniRef50_v8.3/checkpoints/checkpoint_6')

@@ -575,9 +575,9 @@ class VAETrainer:
         loss_log_ce = running_loss_ce / len(self.val_dataloader)
         loss_log_kl = running_loss_kl / len(self.val_dataloader)
         print(f"{name}, val_loss: {loss_log:.4f}, val_accuracy: {acc:.6f}")
-        logs = {"val_loss": loss_log.detach().item(), 
-                "val_ce_loss": loss_log_ce.detach().item(), 
-                "val_kl_loss": loss_log_kl.detach().item(),
+        logs = {"val_loss": loss_log, 
+                "val_ce_loss": loss_log_ce, 
+                "val_kl_loss": loss_log_kl,
                 "val_acc": acc,
                 }
         gc.collect()
@@ -646,7 +646,7 @@ class VAETrainer:
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
-                6
+                
                 with self.accelerator.accumulate(self.model):
                     input = batch['input_ids']
                     attention_mask = batch['attention_mask']

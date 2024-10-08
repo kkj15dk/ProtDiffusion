@@ -9,19 +9,19 @@ from New1D.autoencoder_kl_1d import AutoencoderKL1D
 import os
 
 config = TrainingConfig(
-    num_epochs=2000,  # the number of epochs to train for
-    batch_size=64,
+    num_epochs=20,  # the number of epochs to train for
+    batch_size=16,
     mega_batch=1000,
     gradient_accumulation_steps=16,
     learning_rate = 1e-4,
     lr_warmup_steps = 100,
     kl_warmup_steps = 100,
-    save_image_model_steps=100,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v7.0"),  # the model name locally and on the HF Hub
+    save_image_model_steps=300,
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v11.1"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
-    max_len=32768, # 512 * 2**6
-    max_len_start=4096,
+    max_len=16384 , # 512 * 2**6
+    max_len_start=16384,
     max_len_doubling_steps=100,
     ema_decay=0.9999,
     ema_update_after=100,
@@ -110,4 +110,5 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train_loop()
+    Trainer.train_loop(from_checkpoint='/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v11.0/Epoch_19')
+    Trainer.save_pretrained()

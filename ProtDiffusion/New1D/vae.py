@@ -78,7 +78,6 @@ class DecoderOutput(BaseOutput):
     """
 
     sample: torch.Tensor
-    kl: Optional[torch.FloatTensor] = None
 
 @dataclass
 class AutoencoderKLOutput1D(BaseOutput):
@@ -225,11 +224,13 @@ class Encoder1D(nn.Module):
 
         for down_block in self.down_blocks:
             sample, attention_mask = down_block(sample, attention_mask=attention_mask)
-            sample = sample * attention_mask.unsqueeze(1)
+            if attention_mask is not None:
+                sample = sample * attention_mask.unsqueeze(1)
             attention_masks.append(attention_mask)
 
         # middle
         sample = self.mid_block(sample, attention_mask=attention_mask)
+        sample = sample * attention_mask.unsqueeze(1)
 
         # post-process
         sample = self.conv_norm_out(sample)
@@ -367,7 +368,9 @@ class Decoder1D(nn.Module):
 
         # up
         for i, up_block in enumerate(self.up_blocks):
-            sample = sample * attention_masks[-(i + 1)].unsqueeze(1)
+            attention_mask = attention_masks[-(i + 1)]
+            if attention_mask is not None:
+                sample = sample * attention_masks[-(i + 1)].unsqueeze(1)
             sample = up_block(sample, attention_mask=attention_masks[-(i + 2)])
 
         # post-process

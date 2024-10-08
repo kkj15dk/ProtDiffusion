@@ -129,7 +129,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     @apply_forward_hook
     def encode(
         self, x: torch.Tensor, attention_mask: torch.Tensor = None
-    ) -> Union[EncoderKLOutput1D, Tuple[DiagonalGaussianDistribution1D]]:
+    ) -> EncoderKLOutput1D:
         """
         Encode a batch of sequences into latents.
 
@@ -141,7 +141,8 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         """
         x = self.embedding_in(x)
         x = x.permute(0, 2, 1) # (batch_size, num_channels, seq_len)
-        x = x * attention_mask.unsqueeze(1) # (batch_size, num_channels, seq_len) * (batch_size, 1, seq_len) to set padding to 0 vectors
+        if attention_mask is not None:
+            x = x * attention_mask.unsqueeze(1) # (batch_size, num_channels, seq_len) * (batch_size, 1, seq_len) to set padding to 0 vectors
 
         h, attention_masks = self.encoder(x, attention_mask)
 
@@ -149,6 +150,9 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             moments = self.quant_conv(h)
         else:
             moments = h
+
+        if attention_masks[-1] is not None:
+            moments = moments * attention_masks[-1].unsqueeze(1) # (batch_size, 2*num_channels, seq_len) * (batch_size, 1, seq_len) to set padding to 0 vectors
 
         posterior = DiagonalGaussianDistribution1D(moments)
 
@@ -184,7 +188,8 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 returned.
 
         """
-        decoded = self._decode(z, attention_masks).sample
+        sample = self._decode(z, attention_masks).sample
+        decoded = self.conv_out(sample)
 
         if not return_dict:
             return (decoded,)
@@ -198,14 +203,35 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         
         ce_loss = nn.functional.cross_entropy(output.sample, input_ids, reduction='none') # B, L
-        ce_loss = ce_loss * output.attention_masks[0] # B, L
-        ce_loss = torch.sum(ce_loss) / output.attention_masks[0].sum()
-        
+        if output.attention_masks[0] is not None:
+            ce_loss = ce_loss * output.attention_masks[0] # B, L
+            ce_loss = torch.sum(ce_loss) / output.attention_masks[0].sum()
+        else:
+            ce_loss = ce_loss.mean()
+
         kl_loss = output.latent_dist.kl()
-        kl_loss = kl_loss * output.attention_masks[-1] # B, L
-        kl_loss = torch.sum(kl_loss) / output.attention_masks[-1].sum()
+        if output.attention_masks[-1] is not None:
+            kl_loss = kl_loss * output.attention_masks[-1] # B, L
+            kl_loss = torch.sum(kl_loss) / output.attention_masks[-1].sum()
+        else:
+            kl_loss = kl_loss.mean()
 
         return ce_loss, kl_loss
+    
+    def accuracy_fn(
+        self,
+        output: AutoencoderKLOutput1D,
+        input_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        mask = output.attention_masks[0]
+        logits = output.sample
+        pred = torch.argmax(logits, dim=1)
+        correct = (pred == input_ids).float()
+        if mask is not None:
+            correct = correct * mask
+            return correct.sum() / mask.sum()
+        else:
+            return correct.mean()
 
     def forward(
         self,
@@ -235,10 +261,10 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             z = posterior.sample(generator=generator)
         else:
             z = posterior.mode()
-        dec = self.decode(z, attention_masks).sample
-        logits = self.conv_out(dec)
+
+        logits = self.decode(z, attention_masks).sample
 
         if not return_dict:
             return (logits,)
-        
+
         return AutoencoderKLOutput1D(sample=logits, latent_dist=posterior, attention_masks=attention_masks)

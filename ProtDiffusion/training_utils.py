@@ -711,7 +711,19 @@ class VAETrainer:
                         )
                     self.accelerator_config.automatic_checkpoint_naming = True
 
-
         self.accelerator.end_training()
+
+    def save_pretrained(self, output_dir: Optional[str] = None):
+
+        ce_model = self.accelerator.unwrap_model(self.model)
+        ema_model = self.accelerator.unwrap_model(self.ema.ema_model)
+
+        if output_dir is None:
+            output_dir = os.path.join(self.config.output_dir, "pretrained")
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        ce_model.save_pretrained(os.path.join(output_dir, "CE"))
+        ema_model.save_pretrained(os.path.join(output_dir, "EMA"))
 
 # %%

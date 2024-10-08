@@ -18,7 +18,7 @@ filename_grouped = 'UniRef50'
 
 # %%
 # Define the transformation function for batches
-def encode(example, 
+def encode(example: dict,
             tokenizer: PreTrainedTokenizerFast, 
             sequence_key='sequence', 
             label_key='kingdom', 

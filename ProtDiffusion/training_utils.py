@@ -200,7 +200,7 @@ def group_data(dataset: Dataset, chunk_size: int = 10000, output_dir: str = "gro
 def make_dataloader(config: TrainingConfig,
                         dataset: Dataset,
                         max_len: int,
-                        input_ids_key: str = 'input_ids',
+                        input_key: str = 'input_ids',
                         drop_last: bool = False,
                         num_workers: int = 1,
     ) -> DataLoader:
@@ -209,13 +209,16 @@ def make_dataloader(config: TrainingConfig,
                             config.batch_size,
                             config.mega_batch,
                             max_length=max_len,
-                            input_ids_key=input_ids_key,
+                            input_key=input_key,
+                            label_key='label',
                             drop_last=drop_last,
                             num_workers=num_workers,
     )
     
     clustered_dataset = ClusteredDataset(dataset, 
-                                         input_ids_key=input_ids_key
+                                        id_key='id', 
+                                        length_key='length', 
+                                        keys_to_retrieve=['label', input_key],
     )
     
     dataloader = DataLoader(clustered_dataset,
@@ -231,14 +234,14 @@ class ClusteredDataset(Dataset):
     The dataset is a dictionary with the identifier as the key, and the value is a dictionary with the label, list of sequences, and list of lengths.
     '''
     def __init__(self, dataset, 
-                 input_ids_key: str = 'input_ids',
-                 label_key: str = 'label',
-                 length_key: str = 'length',
+                 id_key: str = 'id',
+                 length_key: str = 'lengths',
+                 keys_to_retrieve: List[str] = ['label', 'input_ids']
     ):
         self.dataset = dataset
-        self.input_ids_key = input_ids_key
-        self.label_key = label_key
+        self.id_key = id_key
         self.length_key = length_key
+        self.keys_to_retrieve = keys_to_retrieve
 
     def __len__(self):
         return len(self.dataset)
@@ -264,24 +267,20 @@ class ClusteredDataset(Dataset):
         clusterindex, sampleindex = zip(*idx)
 
         data = self.dataset[clusterindex]
-        length_key = self.length_key
-        input_ids_key = self.input_ids_key
-        label_key = self.label_key
 
         id = data['id']
-
-        label = []
         length = []
-        input_ids = []
+
+        retrieved_data = {key: [] for key in self.keys_to_retrieve}
         
         for i in range(len(idx)):
             sampleindex_i = sampleindex[i]
+            length.append(data[self.length_key][i][sampleindex_i])
 
-            input_ids.append(data[input_ids_key][i][sampleindex_i])
-            length.append(data[length_key][i][sampleindex_i])
-            label.append(data[label_key][i][sampleindex_i])
+            for key in self.keys_to_retrieve:
+                retrieved_data[key].append(data[key][i][sampleindex_i])
 
-        return {'id': id, 'label': label, 'length': length, 'input_ids': input_ids}
+        return {'id': id, 'length': length, **retrieved_data}
 
 class BatchSampler(Sampler): 
     '''
@@ -292,21 +291,24 @@ class BatchSampler(Sampler):
                  batch_size: int, 
                  mega_batch_size: int, 
                  max_length: Optional[int] = None,
-                 input_ids_key: str = 'input_ids', 
+                 input_key: str = 'input_ids',
+                 input_channels: Optional[int] = None,
+                 label_key: str = 'label',
                  drop_last: bool = True,
                  num_workers: int = 1):
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
         self.drop_last = drop_last
         self.max_length = max_length
-        self.input_ids_key = input_ids_key
+        self.input_key = input_key
+        self.input_channels = input_channels
+        self.label_key = label_key
         self.dataset = dataset
         self.num_workers = num_workers
 
     def collate_fn(self, batch):
         sample_max_len = max(item['length'] for item in batch)
         max_length_cap = self.max_length
-        input_ids_key = self.input_ids_key
 
         if max_length_cap is not None:
             max_len = min(sample_max_len, max_length_cap)
@@ -314,28 +316,32 @@ class BatchSampler(Sampler):
             max_len = sample_max_len
 
         batch_size = len(batch)
-        input_ids = torch.zeros(batch_size, max_len, dtype=torch.long)
+        if self.input_channels is not None:
+            input = torch.zeros(batch_size, self.input_channels, max_len, dtype=torch.long)
+        else:
+            input = torch.zeros(batch_size, max_len, dtype=torch.long)
+
         attention_mask = torch.zeros(batch_size, max_len, dtype=torch.uint8)
         class_labels = torch.zeros(batch_size, dtype=torch.long)
         identifiers = [item['id'] for item in batch]
 
         for i, item in enumerate(batch):
             seq_len = item['length']
-            input_ids_seq = item[input_ids_key]
+            sample = item[self.input_key]
 
             if seq_len > max_len:
                 index = random.randint(0, seq_len - max_len)
-                input_ids[i, :max_len] = torch.tensor(input_ids_seq[index:index+max_len], dtype=torch.long)
+                input[i, :max_len] = torch.tensor(sample[index:index+max_len], dtype=torch.long)
                 attention_mask[i, :max_len] = 1
             else:
-                input_ids[i, :seq_len] = torch.tensor(input_ids_seq, dtype=torch.long)
+                input[i, :seq_len] = torch.tensor(sample, dtype=torch.long)
                 attention_mask[i, :seq_len] = 1
 
-            class_labels[i] = item['label']
+            class_labels[i] = item[self.label_key]
 
         return {
             'id': identifiers, 
-            'input_ids': input_ids, 
+            self.input_key: input, 
             'attention_mask': attention_mask, 
             'class_label': class_labels
         }
@@ -390,7 +396,7 @@ class BatchSampler(Sampler):
                 if self.drop_last and j + self.batch_size > len(pool): # drop the last batch if it's too small
                     continue
 
-                batch = pool[j:j+self.batch_size]
+                batch = pool[j:j+self.batch_size] # (pool_id, sample_id). First is the id of the cluster, second is the id of the sample in the cluster.
                 
                 yield batch
 

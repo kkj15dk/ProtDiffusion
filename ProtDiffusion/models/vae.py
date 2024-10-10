@@ -17,6 +17,7 @@ from typing import Optional, Tuple, List
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from diffusers.utils import BaseOutput, is_torch_version
 from diffusers.utils.torch_utils import randn_tensor
@@ -223,9 +224,15 @@ class Encoder1D(nn.Module):
         attention_masks = [attention_mask]
 
         for down_block in self.down_blocks:
-            sample, attention_mask = down_block(sample, attention_mask=attention_mask)
+            sample = down_block(sample, attention_mask=attention_mask)
             if attention_mask is not None:
+                # Downsample the attention mask
+                attention_mask = -attention_mask.to(torch.float32)
+                attention_mask = F.max_pool1d(attention_mask, kernel_size=2, stride=2, padding=0)
+                attention_mask = -attention_mask.to(torch.int64)
+                # Apply the attention mask
                 sample = sample * attention_mask.unsqueeze(1)
+            # Save the attention mask
             attention_masks.append(attention_mask)
 
         # middle

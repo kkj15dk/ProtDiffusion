@@ -78,6 +78,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         # force_upcast: float = True,
         use_quant_conv: bool = True,
         use_post_quant_conv: bool = True,
+        padding_idx: int = 0,
     ):
         super().__init__()
 
@@ -118,7 +119,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.quant_conv = nn.Conv1d(2 * latent_channels, 2 * latent_channels, 1) if use_quant_conv else None
         self.post_quant_conv = nn.Conv1d(latent_channels, latent_channels, 1) if use_post_quant_conv else None
 
-        self.embedding_in = nn.Embedding(num_class_embeds, block_out_channels[0])
+        self.embedding_in = nn.Embedding(num_class_embeds, block_out_channels[0], padding_idx=padding_idx)
         self.conv_out = nn.Conv1d(block_out_channels[0], num_class_embeds, 1)
 
 

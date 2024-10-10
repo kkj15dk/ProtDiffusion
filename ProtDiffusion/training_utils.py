@@ -30,7 +30,8 @@ from Bio.SeqRecord import SeqRecord
 from tqdm import tqdm
 import json
 
-from New1D.autoencoder_kl_1d import AutoencoderKL1D
+from models.autoencoder_kl_1d import AutoencoderKL1D
+from models.dit_transformer_1d import DiTTransformer1DModel
 from visualization_utils import make_logoplot
 
 # Set a random seed in a bunch of different places
@@ -55,7 +56,7 @@ def set_seed(seed: int = 42) -> None:
     print(f"Random seed set as {seed}")
 
 @dataclass
-class TrainingConfig:
+class VAETrainingConfig:
     batch_size: int = 64  # the batch size
     mega_batch: int = 1000 # how many batches to use for batchsampling
     num_epochs: int = 1  # the number of epochs to train the model
@@ -118,107 +119,62 @@ def count_parameters(model):
     print(f"Model has {n_params} trainable parameters")
     return n_params
 
-def encode(example, sequence_key: str, id_key: str, label_key: str, pad_to_multiple_of: int, tokenizer: PreTrainedTokenizerFast):
-    output = tokenizer(example[sequence_key],
-                        padding = True,
-                        truncation=False, # We need to truncate the sequences later, so we set this to False
-                        pad_to_multiple_of = pad_to_multiple_of,
-                        return_token_type_ids=False,
-                        return_attention_mask=False, # We need to attend to padding tokens, so we set this to False
-    )
-    output['id'] = example[id_key] or None
-    label = example[label_key] or None
-    if label is not None:
-        if label == 2:
-            output['label'] = 1
-        elif label == 2759:
-            output['label'] = 0
-        else:
-            output['label'] = None
-    output['length'] = len(output['input_ids'])
-    return output
+def round_length(length: int, pad: int = 2, rounding: int = 16) -> int:
+    '''
+    Round the length to the nearest multiple of 16.
+    '''
+    return int(np.ceil((length + pad) / rounding) * rounding)
 
-def group_data(dataset: Dataset, chunk_size: int = 10000, output_dir: str = "grouped_data") -> Dataset:
-    print("Grouping data with low memory requirements")
-    
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    dataset_dict = defaultdict(lambda: {'label': None, 'input_ids': [], 'lengths': []})
-    chunk_index = 0
-    
-    # Process the dataset in chunks
-    for i in tqdm(range(0, len(dataset), chunk_size), desc="Processing chunks"):
-        chunk = dataset[i:i + chunk_size]
-        
-        for example in chunk:
-            id = example['id']
-            if dataset_dict[id]['label'] is None:
-                dataset_dict[id]['label'] = example['label']
-            dataset_dict[id]['input_ids'].append(example['input_ids'])
-            dataset_dict[id]['lengths'].append(example['length'])
-        
-        # Write the chunk to disk
-        chunk_file = os.path.join(output_dir, f"chunk_{chunk_index}.json")
-        with open(chunk_file, 'w') as f:
-            json.dump(dataset_dict, f)
-        
-        # Clear the dictionary for the next chunk
-        dataset_dict.clear()
-        chunk_index += 1
-    
-    print(f"Processed {chunk_index} chunks")
-    
-    # Combine the intermediate results
-    combined_dict = defaultdict(lambda: {'label': None, 'input_ids': [], 'lengths': []})
-    
-    for chunk_file in tqdm(os.listdir(output_dir), desc="Combining chunks"):
-        chunk_path = os.path.join(output_dir, chunk_file)
-        with open(chunk_path, 'r') as f:
-            chunk_data = json.load(f)
-            for id, data in chunk_data.items():
-                if combined_dict[id]['label'] is None:
-                    combined_dict[id]['label'] = data['label']
-                combined_dict[id]['input_ids'].extend(data['input_ids'])
-                combined_dict[id]['lengths'].extend(data['lengths'])
-    
-    print(f"Grouped data into {len(combined_dict)} clusters based on the identifier")
-    
-    # Create a generator function
-    def data_generator():
-        for id, data in tqdm(combined_dict.items(), desc="Creating grouped dataset"):
-            yield {
-                'id': id,
-                'label': data['label'],
-                'input_ids': data['input_ids'],
-                'lengths': data['lengths']
-            }
-    
-    grouped_dataset = Dataset.from_generator(data_generator)
-    return grouped_dataset
+def process_sequence(sequence: str,
+                     bos_token: str = "[",
+                     eos_token: str = "]",
+                     pad_token: str = "-",
+) -> str:
+    '''
+    Process the sequence by adding the bos and eos tokens, and padding it to a multiple of 16 (or what the variable is set to in the round_kength).
+    Return the sequence and the length of the sequence.
+    '''
+    seq_len = round_length(len(sequence))
+    sequence = bos_token + sequence + eos_token
+    len_diff = seq_len - len(sequence)
+    rand_int = random.randint(0, len_diff)
+    sequence = pad_token * rand_int + sequence + pad_token * (len_diff - rand_int)
 
-def make_dataloader(config: TrainingConfig,
+    return sequence
+
+def make_dataloader(config: VAETrainingConfig,
                         dataset: Dataset,
+                        tokenizer: PreTrainedTokenizerFast,
                         max_len: int,
-                        input_key: str = 'input_ids',
+                        id_key: str = 'id',
+                        length_key: str = 'length',
+                        label_key: str = 'label',
+                        sequence_key: str = 'sequence',
+                        pad_to_multiple_of: int = 16,
                         drop_last: bool = False,
                         num_workers: int = 1,
-    ) -> DataLoader:
+) -> DataLoader:
 
     sampler = BatchSampler(dataset,
-                            config.batch_size,
-                            config.mega_batch,
-                            max_length=max_len,
-                            input_key=input_key,
-                            label_key='label',
-                            drop_last=drop_last,
-                            num_workers=num_workers,
+                           tokenizer,
+                           config.batch_size,
+                           config.mega_batch,
+                           max_length=max_len,
+                           id_key=id_key,
+                           length_key=length_key,
+                           label_key=label_key,
+                           sequence_key=sequence_key,
+                           pad_to_multiple_of=pad_to_multiple_of,
+                           drop_last=drop_last,
+                           num_workers=num_workers,
     )
     
     clustered_dataset = ClusteredDataset(dataset, 
-                                        id_key='id', 
-                                        length_key='length', 
-                                        keys_to_retrieve=['label', input_key],
+                                        id_key=id_key,
+                                        length_key=length_key,
+                                        label_key=label_key,
+                                        sequence_key=sequence_key,
+                                        pad_to_multiple_of=pad_to_multiple_of,
     )
     
     dataloader = DataLoader(clustered_dataset,
@@ -236,12 +192,16 @@ class ClusteredDataset(Dataset):
     def __init__(self, dataset, 
                  id_key: str = 'id',
                  length_key: str = 'lengths',
-                 keys_to_retrieve: List[str] = ['label', 'input_ids']
+                 label_key: str = 'label',
+                 sequence_key: str = 'sequence',
+                 pad_to_multiple_of: int = 16,
     ):
         self.dataset = dataset
         self.id_key = id_key
         self.length_key = length_key
-        self.keys_to_retrieve = keys_to_retrieve
+        self.label_key = label_key
+        self.sequence_key = sequence_key
+        self.pad_to_multiple_of = pad_to_multiple_of
 
     def __len__(self):
         return len(self.dataset)
@@ -270,17 +230,16 @@ class ClusteredDataset(Dataset):
 
         id = data['id']
         length = []
-
-        retrieved_data = {key: [] for key in self.keys_to_retrieve}
+        label = []
+        sequence = []
         
         for i in range(len(idx)):
             sampleindex_i = sampleindex[i]
             length.append(data[self.length_key][i][sampleindex_i])
+            label.append(data[self.label_key][i][sampleindex_i])
+            sequence.append(data[self.sequence_key][i][sampleindex_i])
 
-            for key in self.keys_to_retrieve:
-                retrieved_data[key].append(data[key][i][sampleindex_i])
-
-        return {'id': id, 'length': length, **retrieved_data}
+        return {'id': id, 'length': length, 'label': label, 'sequence': sequence}
 
 class BatchSampler(Sampler): 
     '''
@@ -288,26 +247,43 @@ class BatchSampler(Sampler):
     '''
     def __init__(self, 
                  dataset: Dataset, 
+                 tokenizer: PreTrainedTokenizerFast,
                  batch_size: int, 
                  mega_batch_size: int, 
                  max_length: Optional[int] = None,
-                 input_key: str = 'input_ids',
-                 input_channels: Optional[int] = None,
+                 id_key: str = 'id',
+                 length_key: str = 'length',
                  label_key: str = 'label',
+                 sequence_key: str = 'input_ids',
+                 pad_to_multiple_of: int = 16,
                  drop_last: bool = True,
                  num_workers: int = 1):
+        self.tokenizer = tokenizer
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
         self.drop_last = drop_last
         self.max_length = max_length
-        self.input_key = input_key
-        self.input_channels = input_channels
+        self.id_key = id_key
+        self.length_key = length_key
         self.label_key = label_key
+        self.sequence_key = sequence_key
+        self.pad_to_multiple_of = pad_to_multiple_of
         self.dataset = dataset
         self.num_workers = num_workers
 
     def collate_fn(self, batch):
-        sample_max_len = max(item['length'] for item in batch)
+        '''
+        Collate function for the DataLoader.
+        Takes dictionary with the keys id_key, length_key, label_key, and sequence_key.
+        The length key has to be already rounded to the amount the sequence will be padded to.
+        This has to be done as this value is also needed in the BatchSampler, so th elength has to be precomputed when making the dataset. See convert_csv_to_dataset.py for an example.
+        The value of each key is a list.
+        Returns a dictionary with the keys 'id', 'label', and 'sequence'.
+        '''
+
+        assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertiong on the dataset level.
+
+        sample_max_len = max(item[self.length_key] for item in batch)
         max_length_cap = self.max_length
 
         if max_length_cap is not None:
@@ -315,39 +291,47 @@ class BatchSampler(Sampler):
         else:
             max_len = sample_max_len
 
-        batch_size = len(batch)
-        if self.input_channels is not None:
-            input = torch.zeros(batch_size, self.input_channels, max_len, dtype=torch.long)
-        else:
-            input = torch.zeros(batch_size, max_len, dtype=torch.long)
-
-        attention_mask = torch.zeros(batch_size, max_len, dtype=torch.uint8)
-        class_labels = torch.zeros(batch_size, dtype=torch.long)
-        identifiers = [item['id'] for item in batch]
+        id = []
+        sequence = []
+        label = []
 
         for i, item in enumerate(batch):
-            seq_len = item['length']
-            sample = item[self.input_key]
+            # id
+            id.append(item[self.id_key])
+
+            # label
+            label.append(item[self.label_key])
+
+            # sequence
+            seq = process_sequence(item[self.sequence_key])
+            seq_len = item[self.length_key]
 
             if seq_len > max_len:
                 index = random.randint(0, seq_len - max_len)
-                input[i, :max_len] = torch.tensor(sample[index:index+max_len], dtype=torch.long)
-                attention_mask[i, :max_len] = 1
+                sequence.append(seq[index:index+max_len])
             else:
-                input[i, :seq_len] = torch.tensor(sample, dtype=torch.long)
-                attention_mask[i, :seq_len] = 1
+                sequence.append(seq)
 
-            class_labels[i] = item[self.label_key]
+        tokenized = self.tokenizer(sequence,
+                        padding=True,
+                        truncation=False, # We truncate the sequences beforehand
+                        return_token_type_ids=False,
+                        return_attention_mask=True, # We need to attend to padding tokens, so we set this to False
+                        return_tensors="pt",
+        )
+        input_ids = tokenized['input_ids']
+        attention_mask = tokenized['attention_mask']
 
         return {
-            'id': identifiers, 
-            self.input_key: input, 
-            'attention_mask': attention_mask, 
-            'class_label': class_labels
+            'id': id, 
+            'label': label,
+            'sequence': sequence,
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
         }
     
     def get_lengths(self, indices, return_dict, process_id):
-        return_dict[process_id] = [self.dataset[i]['length'] for i in indices]
+        return_dict[process_id] = [self.dataset[i][self.length_key] for i in indices]
 
     def __iter__(self):
         size = len(self.dataset)
@@ -425,7 +409,7 @@ class VAETrainer:
                  tokenizer: PreTrainedTokenizerFast, 
                  train_dataloader: DataLoader, 
                  val_dataloader: DataLoader, 
-                 config: TrainingConfig, 
+                 config: VAETrainingConfig, 
                  test_dataloader: DataLoader = None,
                  training_variables: Optional[TrainingVariables] = None,
         ):
@@ -469,6 +453,11 @@ class VAETrainer:
         )
         self.accelerator.register_for_checkpointing(self.training_variables)
 
+        # Retrieve variables set in the dataloader
+        self.pad_to_multiple_of = self.train_dataloader.dataset.pad_to_multiple_of
+        self.seq_key = self.train_dataloader.dataset.sequence_key
+        self.label_key = self.train_dataloader.dataset.label_key
+
     def logits_to_token_ids(self, logits: torch.Tensor, cutoff: Optional[float] = None) -> torch.Tensor:
         '''
         Convert a batch of logits to token_ids.
@@ -479,7 +468,7 @@ class VAETrainer:
         else:
             token_ids = torch.where(logits.max(dim=1).values > cutoff, 
                                     logits.argmax(dim=1), 
-                                    torch.tensor([self.tokenizer.unknown_token_id])
+                                    torch.tensor([self.tokenizer.unknown_token_id]) # TODO: fix with no unknown_token_id in tokenizer
                                     )
         return token_ids
 
@@ -496,10 +485,10 @@ class VAETrainer:
                         n_tokens: int = 1, 
     ):
         '''
-        Scale the gradients by dividing by the amount of tokens
+        Scale the gradients by dividing by the amount of tokens. Necessary for gradient accumulation with different length batches.
         '''
 
-        for n, p in m.named_parameters():
+        for p in m.parameters():
             if p.requires_grad and p.grad is not None:
                 p.grad.data = p.grad.data / n_tokens
 
@@ -512,6 +501,8 @@ class VAETrainer:
         os.makedirs(test_dir, exist_ok=True)
 
         running_loss = 0.0
+        running_loss_ce = 0.0
+        running_loss_kl = 0.0
         num_correct_residues = 0
         total_residues = 0
         name = f"step_{self.training_variables.global_step//1:08d}"
@@ -519,22 +510,27 @@ class VAETrainer:
         progress_bar = tqdm(total=len(self.val_dataloader), disable=not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Evaluating {name}")
 
-        for i, sample in enumerate(self.val_dataloader):
+        for i, batch in enumerate(self.val_dataloader):
 
-            output = model(sample = sample['input_ids'],
-                                attention_mask = sample['attention_mask'],
+            input_ids = batch['input_ids']
+            attention_mask = batch['attention_mask']
+
+            output = model(sample = input_ids,
+                                attention_mask = attention_mask,
                                 sample_posterior = False, # Should be set to False in inference. This will take the mode of the latent dist
             )
 
-            ce_loss, kl_loss = model.loss_fn(output, sample['input_ids'])
+            ce_loss, kl_loss = model.loss_fn(output, input_ids)
             loss = ce_loss + kl_loss * self.config.kl_weight
             running_loss += loss.item()
+            running_loss_ce += ce_loss.item()
+            running_loss_kl += kl_loss.item()
             
             if i == 0 and self.accelerator.is_main_process: # save the first sample each evaluation as a logoplot
                 logoplot_sample = output.sample[0]
-                logoplot_sample_len = sample['attention_mask'][0].sum().item()
+                logoplot_sample_len = attention_mask[0].sum().item()
                 logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
-                logoplot_sample_id = sample['id'][0]
+                logoplot_sample_id = batch['id'][0]
                 probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
                 pool = mp.Pool(1)
                 pool.apply_async(make_logoplot, 
@@ -551,32 +547,36 @@ class VAETrainer:
 
             token_ids_pred = self.logits_to_token_ids(output.sample, cutoff=self.config.cutoff)
 
-            token_ids_correct = ((sample['input_ids'] == token_ids_pred) & (sample['attention_mask'] == 1)).long()
-            num_residues = torch.sum(sample['attention_mask'], dim=1).long()
+            token_ids_correct = ((input_ids == token_ids_pred) & (attention_mask == 1)).long()
+            num_residues = torch.sum(attention_mask, dim=1).long()
 
             num_correct_residues += token_ids_correct.sum().item()
             total_residues += num_residues.sum().item()
 
             # Decode the predicted sequences, and remove zero padding
             seqs_pred = self.tokenizer.batch_decode(token_ids_pred, skip_special_tokens=self.config.skip_special_tokens)
-            seqs_lens = torch.sum(sample['attention_mask'], dim=1).long()
+            seqs_lens = torch.sum(attention_mask, dim=1).long()
             seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
             # Save all samples as a FASTA file
-            seq_record_list = [SeqRecord(Seq(seq), id=str(sample['id'][i]), 
+            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
                             description=
-                            f"classlabel: {sample['class_label'][i].item()} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.2f}")
+                            f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.2f}")
                             for i, seq in enumerate(seqs_pred)]
+
             with open(f"{test_dir}/{name}.fa", "a") as f:
                 SeqIO.write(seq_record_list, f, "fasta")
             
             progress_bar.update(1)
         
         acc = num_correct_residues / total_residues
-        print(f"{name}, val_loss: {running_loss / len(self.val_dataloader):.4f}, val_accuracy: {acc:.4f}")
-        logs = {"val_loss": loss.detach().item(), 
-                "val_ce_loss": ce_loss.detach().item(), 
-                "val_kl_loss": kl_loss.detach().item(),
+        log_loss = running_loss / len(self.val_dataloader)
+        log_loss_ce = running_loss_ce / len(self.val_dataloader)
+        log_loss_kl = running_loss_kl / len(self.val_dataloader)
+        print(f"{name}, val_loss: {log_loss:.4f}, val_accuracy: {acc:.4f}")
+        logs = {"val_loss": log_loss, 
+                "val_ce_loss": log_loss_ce, 
+                "val_kl_loss": log_loss_kl,
                 "val_acc": acc,
                 }
         gc.collect()
@@ -645,37 +645,47 @@ class VAETrainer:
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
-                
+
+                input_ids = batch['input_ids']
+                attention_mask = batch['attention_mask']
+
+                # Gradient accumulation
                 with self.accelerator.accumulate(self.model):
-                    input = batch['input_ids']
-                    attention_mask = batch['attention_mask']
+                    input = input_ids.to(self.accelerator.device)
+                    attention_mask = attention_mask.to(self.accelerator.device)
+
                     n_tokens += attention_mask.sum()
-                    # Predict the noise residual
+
+                    # Forward pass
                     output = self.model(sample = input,
                                     attention_mask = attention_mask,
                                     sample_posterior = True, # Should be set to true in training
                     )
                     
+                    # Loss calculation
                     ce_loss, kl_loss = self.model.loss_fn(output, input) 
-
                     kl_weight = self.config.kl_weight * min(1.0, self.training_variables.global_step / (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
-
                     loss = ce_loss + kl_loss * kl_weight
                     loss_back = loss * attention_mask.sum() # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
 
+                    # Backward pass
                     self.accelerator.backward(loss_back)
 
+                    # Gradient clipping and gradient scaling for gradient accumulation with different length batches
                     if self.accelerator.sync_gradients:
                         self.scale_gradients(self.model, n_tokens)
                         n_tokens = 0
                         if self.config.gradient_clip_val is not None:
                             self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
+                    
+                    # Update the model
                     self.optimizer.step()
                     self.lr_scheduler.step()
                     self.optimizer.zero_grad()
                     if self.accelerator.sync_gradients:
                         self.ema.update()
 
+                # Log the progress
                 progress_bar.update(1)
                 logs = {"train_loss": loss.detach().item(), 
                         "train_ce_loss": ce_loss.detach().item(), 
@@ -688,6 +698,7 @@ class VAETrainer:
                 self.accelerator.log(logs, step=self.training_variables.global_step)
                 self.training_variables.global_step += 1
 
+                # Update the max_len
                 if self.training_variables.global_step % self.config.max_len_doubling_steps == 0:
                     self.update_max_len()
 
@@ -727,3 +738,397 @@ class VAETrainer:
         ema_model.save_pretrained(os.path.join(output_dir, "EMA"))
 
 # %%
+@dataclass
+class ProtDiffusionTrainingConfig:
+    batch_size: int = 64  # the batch size
+    mega_batch: int = 1000 # how many batches to use for batchsampling
+    num_epochs: int = 1  # the number of epochs to train the model
+    gradient_accumulation_steps: int = 2  # the number of steps to accumulate gradients before taking an optimizer step
+    learning_rate: float = 1e-4  # the learning rate
+    lr_warmup_steps:int  = 1000
+    save_image_model_steps:int  = 1000
+    mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
+    optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`
+    SGDmomentum: float = 0.9
+    output_dir: str = os.path.join("output","test")  # the model name locally and on the HF Hub
+    pad_to_multiple_of: int = 16 # should be a multiple of 2 for each layer in the VAE.
+    max_len: int = 512  # truncation of the input sequence
+    max_len_start: Optional[int] = 64  # the starting length of the input sequence
+    max_len_doubling_steps: Optional[int] = 100000  # the number of steps to double the input sequence length
+
+    class_embeddings_concat = False  # whether to concatenate the class embeddings to the time embeddings
+
+    push_to_hub = False  # Not implemented yet. Whether to upload the saved model to the HF Hub
+    hub_model_id = "kkj15dk/protein-VAE"  # the name of the repository to create on the HF Hub
+    hub_private_repo = False
+    overwrite_output_dir = False  # overwrite the old model when re-running the notebook
+    seed: int = 42
+
+    automatic_checkpoint_naming: bool = True  # whether to automatically name the checkpoints
+    total_checkpoints_limit: int = 5  # the total limit of checkpoints to save
+
+    cutoff: Optional[float] = None # cutoff for when to predict the token given the logits, and when to assign the unknown token 'X' to this position
+    skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
+    kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
+    kl_warmup_steps: Optional[int] = None # the number of steps to warm up the KL divergence weight
+
+    gradient_clip_val: Optional[float] = 5.0  # the value to clip the gradients to
+    weight_decay: float = 0.01 # weight decay for the optimizer
+    ema_decay: float = 0.9999 # the decay rate for the EMA
+    ema_update_after: int = 1000 # the number of steps to wait before updating the EMA
+    ema_update_every: int = 1 # the number of steps to wait before updating the EMA
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        if not self.overwrite_output_dir and os.path.exists(self.output_dir):
+            raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
+        
+        if self.push_to_hub:
+            raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
+        
+        assert self.optimizer in ["AdamW", "Adam", "SGD", "Adamax"], "Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`"
+        assert self.mixed_precision in ["no", "fp16"], "Invalid mixed precision setting, choose between `no` and `fp16`" # TODO: implement fully
+        assert self.max_len % self.pad_to_multiple_of == 0, "The maximum length of the input sequence must be a multiple of the pad_to_multiple_of parameter."
+        assert self.max_len_start is None or self.max_len_start % self.pad_to_multiple_of == 0, "The starting length of the input sequence must be a multiple of the pad_to_multiple_of parameter."
+
+        if self.max_len_start is not None:
+            assert self.max_len_start <= self.max_len, "The starting length of the input sequence must be less than or equal to the maximum length of the input sequence, or None."
+
+class ProtDiffusionTrainer:
+    def __init__(self, 
+                 vae: AutoencoderKL1D, 
+                 model: DiTTransformer1DModel,
+                 tokenizer: PreTrainedTokenizerFast, 
+                 train_dataloader: DataLoader, 
+                 val_dataloader: DataLoader, 
+                 config: ProtDiffusionTrainingConfig, 
+                 test_dataloader: DataLoader = None,
+                 training_variables: Optional[TrainingVariables] = None,
+        ):
+        self.tokenizer = tokenizer
+        self.config = config
+        self.training_variables = training_variables or TrainingVariables()
+        self.accelerator_config = ProjectConfiguration(
+            project_dir=self.config.output_dir,
+            logging_dir=os.path.join(self.config.output_dir, "logs"),
+            automatic_checkpoint_naming=self.config.automatic_checkpoint_naming,
+            total_limit=self.config.total_checkpoints_limit, # Limit the total number of checkpoints
+        )
+        self.accelerator = Accelerator(
+            project_config=self.accelerator_config,
+            mixed_precision=self.config.mixed_precision,
+            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
+            log_with="tensorboard",
+        )
+
+        if config.optimizer == "Adam":
+            optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        elif config.optimizer == "AdamW":
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        elif config.optimizer == "Adamax":
+            optimizer = torch.optim.Adamax(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        elif config.optimizer == "SGD":
+            optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, momentum=config.SGDmomentum)
+        else:
+            raise ValueError("Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`")
+
+        lr_scheduler = get_cosine_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=config.lr_warmup_steps,
+            num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+        )
+        # Prepare everything
+        # There is no specific order to remember, you just need to unpack the
+        # objects in the same order you gave them to the prepare method.
+        self.model, self.vae, self.optimizer, self.train_dataloader, self.test_dataloader, self.val_dataloader, self.lr_scheduler = self.accelerator.prepare(
+            model, vae, optimizer, train_dataloader, test_dataloader, val_dataloader, lr_scheduler
+        )
+        self.vae.eval() # Set the VAE to eval mode
+        self.accelerator.register_for_checkpointing(self.training_variables)
+
+        # Retrieve variables set in the dataloader
+        self.pad_to_multiple_of = self.train_dataloader.dataset.pad_to_multiple_of
+        self.seq_key = self.train_dataloader.dataset.sequence_key
+        self.label_key = self.train_dataloader.dataset.label_key
+
+    def logits_to_token_ids(self, logits: torch.Tensor, cutoff: Optional[float] = None) -> torch.Tensor:
+        '''
+        Convert a batch of logits to token_ids.
+        Returns token_ids
+        '''
+        if cutoff is None:
+            token_ids = logits.argmax(dim=1)
+        else:
+            token_ids = torch.where(logits.max(dim=1).values > cutoff, 
+                                    logits.argmax(dim=1), 
+                                    torch.tensor([self.tokenizer.unknown_token_id]) # TODO: fix with no unknown_token_id in tokenizer
+                                    )
+        return token_ids
+
+    def update_max_len(self):
+        if self.training_variables.max_len_start < self.config.max_len:
+            self.training_variables.max_len_start *= 2
+            self.training_variables.max_len_start = min(self.training_variables.max_len_start, self.config.max_len) # To not have an int exploding to infinity in the background
+            max_len = min(self.training_variables.max_len_start, self.config.max_len)
+            print(f"Updating max_len to {max_len}")
+            self.train_dataloader.batch_sampler.max_length = max_len
+
+    def scale_gradients(self, 
+                        m: nn.Module, 
+                        n_tokens: int = 1, 
+    ):
+        '''
+        Scale the gradients by dividing by the amount of tokens. Necessary for gradient accumulation with different length batches.
+        '''
+
+        for p in m.parameters():
+            if p.requires_grad and p.grad is not None:
+                p.grad.data = p.grad.data / n_tokens
+
+    @torch.no_grad()
+    def evaluate(self,
+                 model: DiTTransformer1DModel,
+                 vae: AutoencoderKL1D,
+    ) -> dict:
+        model.eval()
+        test_dir = os.path.join(self.config.output_dir, "samples")
+        os.makedirs(test_dir, exist_ok=True)
+
+        running_loss = 0.0
+        running_loss_ce = 0.0
+        running_loss_kl = 0.0
+        num_correct_residues = 0
+        total_residues = 0
+        name = f"step_{self.training_variables.global_step//1:08d}"
+
+        progress_bar = tqdm(total=len(self.val_dataloader), disable=not self.accelerator.is_local_main_process)
+        progress_bar.set_description(f"Evaluating {name}")
+
+        for i, batch in enumerate(self.val_dataloader):
+
+            input_ids = batch['input_ids']
+            attention_mask = batch['attention_mask']
+
+            output = model(sample = input_ids,
+                                attention_mask = attention_mask,
+                                sample_posterior = False, # Should be set to False in inference. This will take the mode of the latent dist
+            )
+
+            ce_loss, kl_loss = model.loss_fn(output, input_ids)
+            loss = ce_loss + kl_loss * self.config.kl_weight
+            running_loss += loss.item()
+            running_loss_ce += ce_loss.item()
+            running_loss_kl += kl_loss.item()
+            
+            if i == 0 and self.accelerator.is_main_process: # save the first sample each evaluation as a logoplot
+                logoplot_sample = output.sample[0]
+                logoplot_sample_len = attention_mask[0].sum().item()
+                logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
+                logoplot_sample_id = batch['id'][0]
+                probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
+                pool = mp.Pool(1)
+                pool.apply_async(make_logoplot, 
+                                args=(
+                                    probs, 
+                                    logoplot_sample_id, 
+                                    f"{test_dir}/{name}_probs_{logoplot_sample_id}.png", 
+                                    self.tokenizer.decode(range(self.tokenizer.vocab_size)),
+                                ),
+                                error_callback=lambda e: print(e),
+                                callback=lambda _: pool.close(),
+                )
+                gc.collect()
+
+            token_ids_pred = self.logits_to_token_ids(output.sample, cutoff=self.config.cutoff)
+
+            token_ids_correct = ((input_ids == token_ids_pred) & (attention_mask == 1)).long()
+            num_residues = torch.sum(attention_mask, dim=1).long()
+
+            num_correct_residues += token_ids_correct.sum().item()
+            total_residues += num_residues.sum().item()
+
+            # Decode the predicted sequences, and remove zero padding
+            seqs_pred = self.tokenizer.batch_decode(token_ids_pred, skip_special_tokens=self.config.skip_special_tokens)
+            seqs_lens = torch.sum(attention_mask, dim=1).long()
+            seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
+
+            # Save all samples as a FASTA file
+            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
+                            description=
+                            f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.2f}")
+                            for i, seq in enumerate(seqs_pred)]
+
+            with open(f"{test_dir}/{name}.fa", "a") as f:
+                SeqIO.write(seq_record_list, f, "fasta")
+            
+            progress_bar.update(1)
+        
+        acc = num_correct_residues / total_residues
+        log_loss = running_loss / len(self.val_dataloader)
+        log_loss_ce = running_loss_ce / len(self.val_dataloader)
+        log_loss_kl = running_loss_kl / len(self.val_dataloader)
+        print(f"{name}, val_loss: {log_loss:.4f}, val_accuracy: {acc:.4f}")
+        logs = {"val_loss": log_loss, 
+                "val_ce_loss": log_loss_ce, 
+                "val_kl_loss": log_loss_kl,
+                "val_acc": acc,
+                }
+        gc.collect()
+        return logs
+
+    def train_loop(self, from_checkpoint: Optional[Union[str, os.PathLike]] = None):
+
+        # start the loop
+        if self.accelerator.is_main_process:
+            self.ema = EMA(self.model, 
+                           beta = self.config.ema_decay, 
+                           update_after_step = self.config.ema_update_after,
+                           update_every = self.config.ema_update_every
+            )
+            self.ema.to(self.accelerator.device)
+            self.accelerator.register_for_checkpointing(self.ema)
+
+            # Create the output directory
+            if not os.path.exists(self.config.output_dir):
+                os.makedirs(self.config.output_dir, exist_ok=False)
+            elif not self.config.overwrite_output_dir:
+                raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
+            else:
+                raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
+                
+            if self.config.push_to_hub:
+                raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
+            
+            # Start the logging
+            self.accelerator.init_trackers(
+                project_name=self.accelerator_config.logging_dir,
+                config=vars(self.config),
+            )
+
+            # load the checkpoint if it exists
+            if from_checkpoint is None:
+                skipped_dataloader = self.train_dataloader
+                starting_epoch = 0
+                self.training_variables.global_step = 0
+                self.training_variables.val_loss = float("inf")
+                self.training_variables.max_len_start = self.config.max_len_start
+            else:
+                self.accelerator.load_state(input_dir=from_checkpoint)
+                # Skip the first batches
+                starting_epoch = self.training_variables.global_step // len(self.train_dataloader)
+                batches_to_skip = self.training_variables.global_step % len(self.train_dataloader)
+                skipped_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, batches_to_skip)
+                print(f"Loaded checkpoint from {from_checkpoint}")
+                print(f"Starting from epoch {starting_epoch}")
+                print(f"Starting from step {self.training_variables.global_step}")
+                print(f"Skipping {batches_to_skip} batches (randomly)")
+                print(f"Current validation loss: {self.training_variables.val_loss}")
+                print(f"Current max length: {self.training_variables.max_len_start}")
+
+        # Now you train the model
+        self.model.train()
+        n_tokens = 0
+        for epoch in range(starting_epoch, self.config.num_epochs):
+
+            if epoch == starting_epoch:
+                dataloader = skipped_dataloader
+            else:
+                dataloader = self.train_dataloader
+
+            progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
+            progress_bar.set_description(f"Epoch {epoch}")
+
+            for step, batch in enumerate(dataloader):
+
+                input_ids = batch['input_ids']
+                attention_mask = batch['attention_mask']
+
+                # Gradient accumulation
+                with self.accelerator.accumulate(self.model):
+                    input = input_ids.to(self.accelerator.device)
+                    attention_mask = attention_mask.to(self.accelerator.device)
+
+                    n_tokens += attention_mask.sum()
+
+                    # Forward pass
+                    output = self.model(sample = input,
+                                    attention_mask = attention_mask,
+                                    sample_posterior = True, # Should be set to true in training
+                    )
+                    
+                    # Loss calculation
+                    ce_loss, kl_loss = self.model.loss_fn(output, input) 
+                    kl_weight = self.config.kl_weight * min(1.0, self.training_variables.global_step / (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
+                    loss = ce_loss + kl_loss * kl_weight
+                    loss_back = loss * attention_mask.sum() # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
+
+                    # Backward pass
+                    self.accelerator.backward(loss_back)
+
+                    # Gradient clipping and gradient scaling for gradient accumulation with different length batches
+                    if self.accelerator.sync_gradients:
+                        self.scale_gradients(self.model, n_tokens)
+                        n_tokens = 0
+                        if self.config.gradient_clip_val is not None:
+                            self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
+                    
+                    # Update the model
+                    self.optimizer.step()
+                    self.lr_scheduler.step()
+                    self.optimizer.zero_grad()
+                    if self.accelerator.sync_gradients:
+                        self.ema.update()
+
+                # Log the progress
+                progress_bar.update(1)
+                logs = {"train_loss": loss.detach().item(), 
+                        "train_ce_loss": ce_loss.detach().item(), 
+                        "train_kl_loss": kl_loss.detach().item(), 
+                        "kl_weight": kl_weight,
+                        "lr": self.lr_scheduler.get_last_lr()[0], 
+                        "step": self.training_variables.global_step,
+                }
+                progress_bar.set_postfix(**logs)
+                self.accelerator.log(logs, step=self.training_variables.global_step)
+                self.training_variables.global_step += 1
+
+                # Update the max_len
+                if self.training_variables.global_step % self.config.max_len_doubling_steps == 0:
+                    self.update_max_len()
+
+                if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
+                    self.accelerator.wait_for_everyone()
+                    
+                    logs = self.evaluate(self.ema.ema_model)
+                    self.accelerator.log(logs, step=self.training_variables.global_step)
+
+                    new_val_loss = logs["val_loss"]
+
+                    if new_val_loss < self.training_variables.val_loss: # Save the model if the validation loss is lower
+                        self.training_variables.val_loss = new_val_loss
+                        self.accelerator.save_state()
+                    self.model.train() # Make sure the model is in train mode
+                
+                if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
+                    self.accelerator_config.automatic_checkpoint_naming = False
+                    self.accelerator.save_state(
+                            output_dir=os.path.join(self.config.output_dir, f"Epoch_{epoch}")
+                        )
+                    self.accelerator_config.automatic_checkpoint_naming = True
+
+        self.accelerator.end_training()
+
+    def save_pretrained(self, output_dir: Optional[str] = None):
+
+        ce_model = self.accelerator.unwrap_model(self.model)
+        ema_model = self.accelerator.unwrap_model(self.ema.ema_model)
+
+        if output_dir is None:
+            output_dir = os.path.join(self.config.output_dir, "pretrained")
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        ce_model.save_pretrained(os.path.join(output_dir, "CE"))
+        ema_model.save_pretrained(os.path.join(output_dir, "EMA"))

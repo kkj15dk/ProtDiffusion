@@ -538,6 +538,7 @@ class DiTTransformer1DModel(ModelMixin, ConfigMixin):
 
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
+        self.num_classes = num_classes
 
         # Validate inputs.
         if norm_type != "ada_norm_zero":
@@ -639,6 +640,7 @@ class DiTTransformer1DModel(ModelMixin, ConfigMixin):
             `tuple` where the first element is the sample tensor.
         """
         # 1. Input
+        assert all(cl in range(self.num_classes) for cl in class_labels), "class_labels must be in range(num_classes)"
         hidden_states = self.conv_in(hidden_states)
         hidden_states = hidden_states.transpose(1, 2) # (batch, channel, seq_len) -> (batch, seq_len, channel)
 

@@ -227,9 +227,10 @@ class Encoder1D(nn.Module):
             sample = down_block(sample, attention_mask=attention_mask)
             if attention_mask is not None:
                 # Downsample the attention mask
+                dtype = attention_mask.dtype
                 attention_mask = -attention_mask.to(torch.float32)
                 attention_mask = F.max_pool1d(attention_mask, kernel_size=2, stride=2, padding=0)
-                attention_mask = -attention_mask.to(torch.int64)
+                attention_mask = -attention_mask.to(dtype)
                 # Apply the attention mask
                 sample = sample * attention_mask.unsqueeze(1)
             # Save the attention mask
@@ -370,15 +371,21 @@ class Decoder1D(nn.Module):
         upscale_dtype = next(iter(self.up_blocks.parameters())).dtype
 
         # middle
-        sample = self.mid_block(sample, attention_mask=attention_masks[-1])
+        sample = self.mid_block(sample, attention_mask=attention_mask)
         sample = sample.to(upscale_dtype)
 
         # up
         for i, up_block in enumerate(self.up_blocks):
-            attention_mask = attention_masks[-(i + 1)]
-            if attention_mask is not None:
-                sample = sample * attention_masks[-(i + 1)].unsqueeze(1)
-            sample = up_block(sample, attention_mask=attention_masks[-(i + 2)])
+            attention_mask = attention_mask
+            if attention_masks is not None:
+                # Upsample the attention mask
+                dtype = attention_mask.dtype
+                attention_mask = attention_mask.to(torch.float32).unsqueeze(1)
+                attention_mask = F.interpolate(attention_mask, scale_factor=2, mode="nearest")
+                attention_mask = attention_mask.to(dtype).squeeze(1)
+                # Apply the attention mask
+                sample = sample * attention_mask.unsqueeze(1)
+            sample = up_block(sample, attention_mask=attention_mask)
 
         # post-process
         sample = self.conv_norm_out(sample)

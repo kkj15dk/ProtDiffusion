@@ -21,11 +21,16 @@ from dataclasses import dataclass
 
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, BaseOutput
+from ProtDiffusion.models.dit_transformer_1d import DiTTransformer1DModel
+from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
+from diffusers.schedulers import KarrasDiffusionSchedulers
+
+from transformers import PreTrainedTokenizerFast
 
 @dataclass
 class ProteinPipelineOutput(BaseOutput):
     """
-    Output class for seq pipelines.
+    Output class for latents pipelines.
 
     Args:
         seqs (`torch.Tensor`):
@@ -34,32 +39,39 @@ class ProteinPipelineOutput(BaseOutput):
 
     seqs: torch.Tensor
 
-class DDPMProteinPipeline(DiffusionPipeline):
+class ProtDiffusionPipeline(DiffusionPipeline):
     r"""
-    Pipeline for seq generation.
+    Pipeline for latents generation.
 
     This model inherits from [`DiffusionPipeline`]. Check the superclass documentation for the generic methods
     implemented for all pipelines (downloading, saving, running on a particular device, etc.).
 
     Parameters:
-        unet ([`UNet2DModel`]):
-            A `UNet2DModel` to denoise the encoded seq latents.
+        transformer ([`DITTransformer1DModel`]):
+            A `DITTransformer1DModel` to denoise the encoded latents latents.
+        vae ([`AutoencoderKL1D`])
+            Variational Auto-Encoder (VAE) model to encode and decode input_ids to and from latent representations.
         scheduler ([`SchedulerMixin`]):
-            A scheduler to be used in combination with `unet` to denoise the encoded seq. Can be one of
+            A scheduler to be used in combination with `unet` to denoise the encoded latents. Can be one of
             [`DDPMScheduler`], or [`DDIMScheduler`].
         tokenizer ([`PreTrainedTokenizer`]):
-            The tokenizer to be used for decoding the seqs.
+            The tokenizer to be used for decoding the sequences into input_ids.
     """
 
-    model_cpu_offload_seq = "unet"
+    model_cpu_offload_seq = "transformer->unet"
 
-    def __init__(self, unet, scheduler, tokenizer):
+    def __init__(self,
+                 transformer: DiTTransformer1DModel, 
+                 vae: AutoencoderKL1D,
+                 scheduler: KarrasDiffusionSchedulers,
+                 tokenizer: PreTrainedTokenizerFast,
+    ):
         super().__init__()
-        self.register_modules(unet=unet, scheduler=scheduler, tokenizer=tokenizer)
+        self.register_modules(transformer=transformer, vae=vae, scheduler=scheduler, tokenizer=tokenizer)
 
     def tensor_to_seq(self, tensor, cutoff = None):
         '''
-        Convert a tensor to a seq using the tokenizer.
+        Convert a tensor to a latents using the tokenizer.
         '''
         
         if cutoff is None:
@@ -67,17 +79,17 @@ class DDPMProteinPipeline(DiffusionPipeline):
         else:
             token_ids = torch.where(tensor.max(dim=1).values > cutoff, 
                                     tensor.argmax(dim=1), 
-                                    torch.tensor([self.tokenizer.unknown_token_id])
-                                    )
+                                    torch.tensor([self.tokenizer.unknown_token_id]),
+            )
 
         return self.tokenizer.batch_decode(token_ids)
 
     @torch.no_grad()
     def __call__(
         self,
-        batch_size: int = 1,
-        seq_len: int = 256,
-        class_labels: Optional[torch.Tensor] = None,
+        seq_len: List[int],
+        class_labels: Optional[List[int]] = None,
+        guidance_scale: float = 4.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         num_inference_steps: int = 1000,
         output_type: Optional[str] = "aa_seq",
@@ -88,37 +100,41 @@ class DDPMProteinPipeline(DiffusionPipeline):
         The call function to the pipeline for generation.
 
         Args:
-            batch_size (`int`, *optional*, defaults to 1):
-                The number of images to generate.
-            seq_len (`int`, *optional*, defaults to 256):
-                The length of the generated seq. Must be divisible by the pipelines pad_to_multiple_of attribute.
+            seq_len (List[int]):
+                The length of the generated latents. Will be padded to be divisible by the pipelines pad_to_multiple_of attribute.
+            Class_labels (`List[int]`, *optional*):
+                The class labels to condition the generation on. If not provided, the model will generate latents
+                without any class labels.
+            guidance_scale (`float`, *optional*, defaults to 4.0):
+                The scale of the guidance loss. A higher value will make the model more likely to generate latents
+                that follow the class_label. A value of 0 will disable guidance.
             generator (`torch.Generator`, *optional*):
                 A [`torch.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
                 generation deterministic.
             num_inference_steps (`int`, *optional*, defaults to 1000):
-                The number of denoising steps. More denoising steps usually lead to a higher quality seq at the
+                The number of denoising steps. More denoising steps usually lead to a higher quality latents at the
                 expense of slower inference.
             output_type (`str`, *optional*, defaults to `"aa_seq"`):
-                The output format of the generated seq. Defaults to aa_seq, amino acid sequence.
+                The output format of the generated latents. Defaults to aa_seq, amino acid sequence.
             return_dict (`bool`, *optional*, defaults to `True`):
                 Whether or not to return a [`~pipelines.ImagePipelineOutput`] instead of a plain tuple.
             cut_off (`int`, *optional*):
-                The per residue cut-off value of the generated seq. If provided, every residue with a value
-                below the cut-off will be seq to 'X', otherwise, the residue will be returned with the highest probability.
+                The per residue cut-off value of the generated latents. If provided, every residue with a value
+                below the cut-off will be latents to 'tokenizer.unkown_id', otherwise, the residue will be returned with the highest probability.
 
-        Example:
+        # # Example:
 
-        ```py
-        >>> from diffusers import DDPMPipeline
+        # # ```py
+        # # >>> from diffusers import DDPMPipeline
 
-        >>> # load model and scheduler
-        >>> pipe = DDPMPipeline.from_pretrained("google/ddpm-cat-256")
+        # # >>> # load model and scheduler
+        # # >>> pipe = DDPMPipeline.from_pretrained("google/ddpm-cat-256")
 
-        >>> # run pipeline in inference (sample random noise and denoise)
-        >>> seq = pipe().images[0]
+        # # >>> # run pipeline in inference (sample random noise and denoise)
+        # # >>> latents = pipe().images[0]
 
-        >>> # save seq
-        >>> seq.save("ddpm_generated_image.png")
+        # # >>> # save latents
+        # # >>> latents.save("ddpm_generated_image.png")
         ```
 
         Returns:
@@ -126,39 +142,86 @@ class DDPMProteinPipeline(DiffusionPipeline):
                 If `return_dict` is `True`, [`~pipelines.ImagePipelineOutput`] is returned, otherwise a `tuple` is
                 returned where the first element is a list with the generated images
         """
-        # Sample gaussian noise to begin loop
-        seq_shape = (batch_size, self.unet.config.in_channels, seq_len)
+        # Preprocess inputs
+        if class_labels is None:
+            class_labels = [self.transformer.num_classes] * len(seq_len) # default to the last calss, which is the calss corresponding to None
+        for i in range(len(class_labels)): # Alternatively, use -1 to represent None
+            if class_labels[i] == -1:
+                class_labels[i] = self.transformer.num_classes
+        for i, len in enumerate(seq_len):
+            if len % self.vae.pad_to_multiple_of != 0:
+                print(f"seq_len[{i}] is not divisible by {self.vae.pad_to_multiple_of}. Padding to the next multiple.")
+                seq_len[i] = len + (self.vae.pad_to_multiple_of - len % self.vae.pad_to_multiple_of)
 
-        if self.device.type == "mps":
+        batch_size = len(seq_len)
+        assert len(class_labels) == batch_size, "You have to give as many class_labels as seq_len"
+
+        latent_channels = self.transformer.config.in_channels
+        seq_shape = (batch_size, latent_channels, max(seq_len))
+        attention_mask = torch.zeros((batch_size, max(seq_len)), device=self._execution_device)
+        for i, len in enumerate(seq_len):
+            attention_mask[i, :len] = 1
+        class_labels = torch.tensor(class_labels, device=self._execution_device)
+
+        # Sample gaussian noise to begin loop
+        if self._execution_device.type == "mps":
             # randn does not work reproducibly on mps
-            seq = randn_tensor(seq_shape, generator=generator)
-            seq = seq.to(self.device)
+            latents = randn_tensor(seq_shape, generator=generator)
+            latents = latents.to(self._execution_device)
         else:
-            seq = randn_tensor(seq_shape, generator=generator, device=self.device)
+            latents = randn_tensor(seq_shape, generator=generator, device=self._execution_device)
+
+        # If using guidance, double the input for classifier free guidance
+        if guidance_scale > 0: # TODO: Mabe should be above 1 instead of above 0, see https://github.com/huggingface/diffusers/blob/v0.30.3/src/diffusers/pipelines/dit/pipeline_dit.py#L159
+            latents = torch.cat([latents] * 2, dim=0)
+            class_null = torch.tensor([self.transformer.num_classes] * batch_size, device=self._execution_device)
+            class_labels = torch.cat([class_labels, class_null], dim=0)
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps)
-        
-        attention_mask = torch.ones((batch_size, seq_len), device=self.device)
-
         for t in self.progress_bar(self.scheduler.timesteps):
+            hidden_states = self.scheduler.scale_model_input(latents, t)
+            timesteps = torch.tensor([t] * hidden_states.shape[0], device=self._execution_device)
             # 1. predict noise model_output
-            model_output = self.unet(sample = seq, 
-                                    timestep = t,
-                                    class_labels = class_labels,
-                                    attention_mask = attention_mask,
-                                    ).sample
+            model_output = self.transformer(hidden_states = hidden_states, 
+                                            attention_mask = attention_mask,
+                                            timestep = timesteps,
+                                            class_labels = class_labels,
+            ).sample
 
-            # 2. compute previous seq: x_t -> x_t-1
-            seq = self.scheduler.step(model_output, t, seq, generator=generator).prev_sample
+            # 2. Perform guidance
+            if guidance_scale > 0: # rest is for a learned sigma, if the transformer has an output for sigma (having 2*latent_channels as output)
+                eps, rest = model_output[:, :latent_channels], model_output[:, latent_channels:]
+                cond_eps, uncond_eps = eps.chunk(2, dim=0)
 
-        seq = (seq / 2 + 0.5).clamp(0, 1).cpu()
+                half_eps = uncond_eps + guidance_scale * (cond_eps - uncond_eps)
+                eps = torch.cat([half_eps, half_eps], dim=0)
+
+                model_output = torch.cat([eps, rest], dim=1)
+
+            # 3. Learned sigma
+            if self.transformer.config.out_channels // 2 == latent_channels:
+                model_output, _ = model_output.chunk(2, dim=1)
+
+            # 4. compute previous latents: x_t -> x_t-1
+            latents = self.scheduler.step(model_output, t, latents, generator=generator).prev_sample
+
+        if guidance_scale > 0:
+            latents = latents[:batch_size]
+
+        # Decode latents
+        if self.vae.config.scaling_factor is not None:
+            latents = 1 / self.vae.config.scaling_factor
+
+        vae_output = self.vae.decode(latents, attention_mask)
+
+        latents = (latents / 2 + 0.5).clamp(0, 1).cpu()
         if output_type == "aa_seq":
-            seq = self.tensor_to_seq(seq, cutoff)
+            latents = self.tensor_to_seq(latents, cutoff)
         elif output_type == "tensor":
             pass
 
         if not return_dict:
-            return (seq,)
+            return (latents,)
 
-        return ProteinPipelineOutput(seqs=seq)
+        return ProteinPipelineOutput(seqs=latents)

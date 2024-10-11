@@ -14,6 +14,8 @@
     - Make it be deterministic in inference (using mode for sampling posterior)
     - Still have it sample in model.eval(), to be able to calculate kl_loss
     - sigma-VAE ??
+    - get the scale_factor, and pass to the diffusion model to scale the latents - see section D.1 and G https://arxiv.org/pdf/2112.10752
+    - fix the attention_mask mess. There will be a different attention_mask for the input, as there should be for the output, when an unknown amino acid is in the input. Alternatively, remove all the *attention_mask from the VAE.
 - U-Net
 - DiT
 - FlowMatchDiscreteEulerScheduler

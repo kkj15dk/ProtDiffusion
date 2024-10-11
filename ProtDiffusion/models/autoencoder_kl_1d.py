@@ -78,9 +78,11 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         # force_upcast: float = True,
         use_quant_conv: bool = True,
         use_post_quant_conv: bool = True,
-        padding_idx: int = 0,
+        padding_idx: int = 0, # padding index for the input, used to make the embedding of the padding index 0
+        pad_to_multiple_of: int = 16,
     ):
         super().__init__()
+        self.pad_to_multiple_of = pad_to_multiple_of
 
         # pass init params to Encoder
         self.encoder = Encoder1D(
@@ -159,12 +161,12 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
         return EncoderKLOutput1D(latent_dist=posterior, attention_masks=attention_masks)
 
-    def _decode(self, z: torch.Tensor, attention_masks: torch.Tensor = None, return_dict: bool = True) -> Union[DecoderOutput, torch.Tensor]:
+    def _decode(self, z: torch.Tensor, attention_mask: torch.Tensor = None, return_dict: bool = True) -> Union[DecoderOutput, torch.Tensor]:
 
         if self.post_quant_conv is not None:
             z = self.post_quant_conv(z)
 
-        dec = self.decoder(z, attention_masks)
+        dec = self.decoder(z, attention_mask)
 
         if not return_dict:
             return (dec,)
@@ -173,7 +175,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
     @apply_forward_hook
     def decode(
-        self, z: torch.FloatTensor, attention_masks: torch.Tensor = None, return_dict: bool = True, generator=None
+        self, z: torch.FloatTensor, attention_mask: torch.Tensor = None, return_dict: bool = True, generator=None
     ) -> Union[DecoderOutput, torch.FloatTensor]:
         """
         Decode a batch of images.
@@ -189,7 +191,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 returned.
 
         """
-        sample = self._decode(z, attention_masks).sample
+        sample = self._decode(z, attention_mask).sample
         decoded = self.conv_out(sample)
 
         if not return_dict:
@@ -252,6 +254,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             return_dict (`bool`, *optional*, defaults to `True`):
                 Whether or not to return a [`DecoderOutput`] instead of a plain tuple.
         """
+        assert sample.shape[-1] % self.pad_to_multiple_of == 0, f"Input seq_len must be divisible by {self.pad_to_multiple_of}"
         x = sample
 
         output = self.encode(x, attention_mask)
@@ -263,7 +266,8 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         else:
             z = posterior.mode()
 
-        logits = self.decode(z, attention_masks).sample
+        attention_mask = attention_masks[-1] if attention_masks[-1] is not None else None
+        logits = self.decode(z, attention_mask).sample
 
         if not return_dict:
             return (logits,)

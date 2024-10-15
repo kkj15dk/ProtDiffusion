@@ -1,27 +1,29 @@
 # %%
-from training_utils import VAETrainingConfig, make_dataloader, set_seed, VAETrainer, count_parameters
+from ProtDiffusion.training_utils import ProtDiffusionTrainingConfig, make_dataloader, set_seed, ProtDiffusionTrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
+from diffusers import DDPMScheduler
 
 from datasets import load_from_disk
 
-from models.autoencoder_kl_1d import AutoencoderKL1D
+from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
+from ProtDiffusion.models.dit_transformer_1d import DiTTransformer1DModel
 
 import os
 
-config = VAETrainingConfig(
-    num_epochs=2000,  # the number of epochs to train for
+config = ProtDiffusionTrainingConfig(
+    num_epochs=5000,  # the number of epochs to train for
     batch_size=16,
     mega_batch=1000,
     gradient_accumulation_steps=16,
-    learning_rate = 1e-4,
+    learning_rate = 1e-5,
     lr_warmup_steps = 100,
     kl_warmup_steps = 100,
-    save_image_model_steps=1000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v14.2"),  # the model name locally and on the HF Hub
+    save_image_model_steps=5000,
+    output_dir=os.path.join("output","ProtDiffusion-UniRef50_v1.1"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
-    max_len=512 , # 512 * 2**6
-    max_len_start=512,
+    max_len=2048, # 512 * 2**6
+    max_len_start=2048,
     max_len_doubling_steps=100,
     ema_decay=0.9999,
     ema_update_after=100,
@@ -78,46 +80,45 @@ print("length of train dataloader: ", len(train_dataloader))
 print("length of val dataloader: ", len(val_dataloader))
 print("length of test dataloader: ", len(test_dataloader))
 
+vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v18.1/pretrained/EMA')
+tokenizer = PreTrainedTokenizerFast.from_pretrained('/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1')
+
 # %%
-model = AutoencoderKL1D(
-    num_class_embeds=tokenizer.vocab_size,  # the number of class embeddings
-    
-    down_block_types=(
-        "DownEncoderBlock1D",
-        "DownEncoderBlock1D",
-        "DownEncoderBlock1D",
-        "DownEncoderBlock1D",  # a ResNet downsampling block
-    ),
-    up_block_types=(
-        "UpDecoderBlock1D",  # a ResNet upsampling block
-        "UpDecoderBlock1D",
-        "UpDecoderBlock1D",
-        "UpDecoderBlock1D",
-    ),
-    block_out_channels=(128, 256, 512, 512),  # the number of output channels for each block
-    mid_block_type="UNetMidBlock1D",  # the type of the middle block
-    mid_block_channels=1024,  # the number of output channels for the middle block
-    mid_block_add_attention=False,  # whether to add a spatial self-attention block to the middle block
-    layers_per_block=2,  # how many ResNet layers to use per UNet block
-    transformer_layers_per_block=1, # how many transformer layers to use per ResNet layer. Not implemented yet.
-
-    latent_channels=64,  # the dimensionality of the latent space
-
-    num_attention_heads=1,  # the number of attention heads in the spatial self-attention blocks
-    upsample_type="conv", # the type of upsampling to use, either 'conv' (and nearest neighbor) or 'conv_transpose'
-    act_fn="swish",  # the activation function to use
-    padding_idx=tokenizer.pad_token_id,  # the padding index
+transformer = DiTTransformer1DModel(
+    num_attention_heads = 8,
+    attention_head_dim = 72,
+    in_channels = vae.config.latent_channels,
+    num_layers = 8,
+    attention_bias = True,
+    activation_fn = "gelu-approximate",
+    num_classes = 2,
+    upcast_attention = False,
+    norm_type = "ada_norm_zero",
+    norm_elementwise_affine = False,
+    norm_eps = 1e-5,
+    pos_embed_type = "sinusoidal", # sinusoidal
+    num_positional_embeddings = 1024,
+    use_rope_embed = True, # RoPE https://github.com/lucidrains/rotary-embedding-torch
 )
-count_parameters(model) # Count the parameters of the model and print
+count_parameters(transformer) # Count the parameters of the model and print
 
-Trainer = VAETrainer(model, 
-                     tokenizer, 
-                     train_dataloader, 
-                     val_dataloader, 
-                     config, 
-                     test_dataloader,
+# %%
+noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
+
+Trainer = ProtDiffusionTrainer(transformer=transformer,
+                               vae=vae,
+                               tokenizer=tokenizer,
+                               train_dataloader=train_dataloader,
+                               val_dataloader=val_dataloader,
+                               config=config,
+                               test_dataloader=test_dataloader,
+                               noise_scheduler = noise_scheduler, # the scheduler to use for the diffusion
+                               eval_seq_len = [64, 64, 256, 256, 1024, 1024, 4096, 4096], # the sequence lengths to evaluate on
+                               eval_class_labels = [0,1,0,1,0,1,0,1], # the class labels to evaluate on, should be a list the same length as the eval batch size
+                               eval_guidance_scale = 4.0, # the scale of the guidance for the diffusion
+                               eval_num_inference_steps = 100, # the number of inference steps for the diffusion
 )
 
 # %%
 if __name__ == '__main__':
-    Trainer.train_loop(from_checkpoint='/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v14.1/checkpoints/checkpoint_22')
+    Trainer.train()

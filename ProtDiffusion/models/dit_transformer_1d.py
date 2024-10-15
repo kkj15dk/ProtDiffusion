@@ -640,7 +640,11 @@ class DiTTransformer1DModel(ModelMixin, ConfigMixin):
             `tuple` where the first element is the sample tensor.
         """
         # 1. Input
-        assert all(cl in range(self.num_classes) for cl in class_labels), "class_labels must be in range(num_classes)"
+        assert all(cl in range(self.num_classes + 1) for cl in class_labels), "class_labels must be in the range of num_classes" # 0-indexed, and +1 to also have the no class label for classifier free guidance
+
+        if attention_mask is not None:
+            hidden_states = hidden_states * attention_mask.unsqueeze(1)
+
         hidden_states = self.conv_in(hidden_states)
         hidden_states = hidden_states.transpose(1, 2) # (batch, channel, seq_len) -> (batch, seq_len, channel)
 
@@ -655,12 +659,16 @@ class DiTTransformer1DModel(ModelMixin, ConfigMixin):
                 cross_attention_kwargs=cross_attention_kwargs,
                 class_labels=class_labels,
             )
+            if attention_mask is not None:
+                hidden_states = hidden_states * attention_mask.unsqueeze(-1)
 
         # 3. Output
         conditioning = self.transformer_blocks[0].norm1.emb(timestep, class_labels, hidden_dtype=hidden_states.dtype)
         shift, scale = self.proj_out_1(F.silu(conditioning)).chunk(2, dim=1)
         hidden_states = self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
         output = self.proj_out_2(hidden_states).transpose(1, 2) # (batch, seq_len, channel) -> (batch, channel, seq_len)
+        if attention_mask is not None:
+            output = output * attention_mask.unsqueeze(1)
 
         if not return_dict:
             return (output,)

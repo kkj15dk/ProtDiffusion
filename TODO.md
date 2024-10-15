@@ -16,6 +16,7 @@
     - sigma-VAE ??
     - get the scale_factor, and pass to the diffusion model to scale the latents - see section D.1 and G https://arxiv.org/pdf/2112.10752
     - fix the attention_mask mess. There will be a different attention_mask for the input, as there should be for the output, when an unknown amino acid is in the input. Alternatively, remove all the *attention_mask from the VAE.
+    - How should a VAE be used in inference? - With .mode() or .sample()?
 - U-Net
 - DiT
 - FlowMatchDiscreteEulerScheduler
@@ -29,6 +30,7 @@
 - AttenXBlock1d
     - num_attention_heads
     - x-transformers ??
+- Masked (Group)normalization https://github.com/pytorch/pytorch/issues/81985
 
 # Training
 - [x] Be able to restart training 

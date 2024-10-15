@@ -95,6 +95,7 @@ class AutoencoderKLOutput1D(BaseOutput):
     latent_dist: Optional["DiagonalGaussianDistribution1D"] = None
     attention_masks: Optional[List[torch.Tensor]] = None
 
+
 @dataclass
 class EncoderKLOutput1D(BaseOutput):
     """
@@ -220,6 +221,8 @@ class Encoder1D(nn.Module):
         r"""The forward method of the `Encoder` class."""
 
         sample = self.conv_in(sample)
+        if attention_mask is not None: # TODO: second added 13/10
+            sample = sample * attention_mask.unsqueeze(1)
 
         attention_masks = [attention_mask]
 
@@ -228,22 +231,26 @@ class Encoder1D(nn.Module):
             if attention_mask is not None:
                 # Downsample the attention mask
                 dtype = attention_mask.dtype
-                attention_mask = -attention_mask.to(torch.float32)
+                attention_mask = attention_mask.logical_not().to(torch.float32)
                 attention_mask = F.max_pool1d(attention_mask, kernel_size=2, stride=2, padding=0)
-                attention_mask = -attention_mask.to(dtype)
+                attention_mask = attention_mask.logical_not().to(dtype)
                 # Apply the attention mask
-                sample = sample * attention_mask.unsqueeze(1)
+                sample = sample * attention_mask.unsqueeze(1) # TODO: added 13/10
             # Save the attention mask
             attention_masks.append(attention_mask)
 
         # middle
         sample = self.mid_block(sample, attention_mask=attention_mask)
-        sample = sample * attention_mask.unsqueeze(1)
+        if attention_mask is not None:
+            # Apply the attention mask
+            sample = sample * attention_mask.unsqueeze(1) # TODO: added 13/10
 
         # post-process
         sample = self.conv_norm_out(sample)
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
+        # if attention_mask is not None:
+        #     sample = sample * attention_mask.unsqueeze(1)
 
         return sample, attention_masks
 
@@ -362,11 +369,13 @@ class Decoder1D(nn.Module):
     def forward(
         self,
         sample: torch.Tensor,
-        attention_masks: List[torch.Tensor] = None,
+        attention_mask: torch.Tensor = None,
     ) -> torch.Tensor:
         r"""The forward method of the `Decoder` class."""
 
         sample = self.conv_in(sample)
+        # if attention_mask is not None:
+            # sample = sample * attention_mask.unsqueeze(1)
 
         upscale_dtype = next(iter(self.up_blocks.parameters())).dtype
 
@@ -376,20 +385,24 @@ class Decoder1D(nn.Module):
 
         # up
         for i, up_block in enumerate(self.up_blocks):
-            attention_mask = attention_mask
-            if attention_masks is not None:
+            if attention_mask is not None:
+                # Apply the attention mask
+                sample = sample * attention_mask.unsqueeze(1) # TODO: added 13/10
                 # Upsample the attention mask
                 dtype = attention_mask.dtype
                 attention_mask = attention_mask.to(torch.float32).unsqueeze(1)
                 attention_mask = F.interpolate(attention_mask, scale_factor=2, mode="nearest")
                 attention_mask = attention_mask.to(dtype).squeeze(1)
-                # Apply the attention mask
-                sample = sample * attention_mask.unsqueeze(1)
             sample = up_block(sample, attention_mask=attention_mask)
 
         # post-process
+        if attention_mask is not None: # TODO: second added 13/10
+            # Apply the attention mask
+            sample = sample * attention_mask.unsqueeze(1) # TODO: second added 13/10
         sample = self.conv_norm_out(sample)
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
+        if attention_mask is not None:
+            sample = sample * attention_mask.unsqueeze(1) # TODO: second added 13/10
 
         return sample

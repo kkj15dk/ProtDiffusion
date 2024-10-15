@@ -29,11 +29,11 @@ config = VAETrainingConfig(
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
+dataset = load_from_disk('/home/kaspe/ProtDiffusion/datasets/UniRef50_encoded_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kaspe/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.2
@@ -54,8 +54,8 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-print("setting num_workers to 16")
-num_workers = 16
+print("setting num_workers to 12")
+num_workers = 12
 train_dataloader = make_dataloader(config, 
                                    train_dataset,
                                    tokenizer=tokenizer,
@@ -120,4 +120,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v18.1/checkpoints/checkpoint_133')
+    Trainer.train()

@@ -4,7 +4,7 @@ from tqdm import tqdm
 import os
 import pandas as pd
 from transformers import PreTrainedTokenizerFast
-from training_utils import round_length
+from ProtDiffusion.training_utils import round_length
 
 # %%
 # Define the parameters
@@ -12,8 +12,8 @@ sequence_key = 'sequence'
 id_key = 'clusterid' # This is the column to group by
 label_key = 'familytaxonid'
 pad_to_multiple_of = 16
-output_path = '/home/kkj/ProtDiffusion/datasets/'
-input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv' # Has to be sorted by id
+output_path = '/home/kaspe/ProtDiffusion/datasets/'
+input_path = '/home/kaspe/ProtDiffusion/datasets/UniRefALL_sorted.csv' # Has to be sorted by id
 filename_encoded = 'UniRefALL'
 filename_grouped = 'UniRef50'
 
@@ -83,14 +83,14 @@ def stream_groupby_gen(dataset: Dataset,
 dataset = load_dataset('csv', data_files=input_path)['train']
 
 # %%
-# dataset = dataset.rename_column(' familytaxonid', 'familytaxonid')
-# dataset = dataset.rename_column(' sequence', 'sequence')
-# dataset = dataset.rename_column(' cluster90id', 'cluster90id')
-# dataset = dataset.rename_column(' cluster100id', 'cluster100id')
+dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
+dataset = dataset.rename_column(' sequence', 'sequence')
+dataset = dataset.rename_column(' cluster90id', 'cluster90id')
+dataset = dataset.rename_column(' cluster100id', 'cluster100id')
 
 # %%
 # filter so that only sequences with ACDEFGHIKLMNOPQRSTUVWY are included
-dataset = dataset.filter(lambda x: all(c in 'ACDEFGHIKLMNPQRSTVWY' for c in x['sequence']), num_proc=12)
+# dataset = dataset.filter(lambda x: all(c in 'ACDEFGHIKLMNPQRSTVWY' for c in x['sequence']), num_proc=12)
 
 # %%
 # Encode the dataset

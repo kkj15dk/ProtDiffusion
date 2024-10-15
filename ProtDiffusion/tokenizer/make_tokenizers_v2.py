@@ -12,7 +12,7 @@ from transformers import PreTrainedTokenizerFast
 @dataclass
 class TrainingConfig:
     pad_to_multiple_of = 16  # the model needs padding to be a multiple of 8, for the U-Net architecture in use
-    padding_side = "right"  # where to put the padding tokens in padding to multiple of.
+    padding_side = "right"  # where to put the padding tokens.
     bos_token = "[" # beginning of sequence token
     eos_token = "]" # end of sequence token
     pad_token = "-"

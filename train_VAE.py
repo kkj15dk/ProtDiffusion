@@ -17,7 +17,7 @@ config = VAETrainingConfig(
     lr_warmup_steps = 100,
     kl_warmup_steps = 100,
     save_image_model_steps=100,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v18.3"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v22.1"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=2048, # 512 * 2**6
@@ -120,4 +120,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v18.1/checkpoints/checkpoint_133')
+    Trainer.train()

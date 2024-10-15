@@ -19,3 +19,4 @@ ProtDiffusion/dataset/grouped_data
 */protein-VAE*
 output
 *.csv
+IDA_IDs.txt

@@ -4,7 +4,7 @@ from tqdm import tqdm
 import os
 import pandas as pd
 from transformers import PreTrainedTokenizerFast
-from training_utils import round_length
+from ProtDiffusion.training_utils import round_length
 
 # %%
 # Define the parameters
@@ -13,9 +13,10 @@ id_key = 'clusterid' # This is the column to group by
 label_key = 'familytaxonid'
 pad_to_multiple_of = 16
 output_path = '/home/kkj/ProtDiffusion/datasets/'
-input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv' # Has to be sorted by id
-filename_encoded = 'UniRefALL'
-filename_grouped = 'UniRef50'
+# input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv' # Has to be sorted by id
+input_path = '/home/kkj/ProtDiffusion/PKSs.csv'
+filename_encoded = 'PKSs'
+filename_grouped = 'PKSs'
 
 # %%
 # Define the transformation function for batches

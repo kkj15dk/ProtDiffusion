@@ -1,5 +1,5 @@
 # %%
-from New1D.autoencoder_kl_1d import AutoencoderKL1D
+from models.autoencoder_kl_1d import AutoencoderKL1D
 from datasets import load_from_disk, Dataset
 import random
 import torch

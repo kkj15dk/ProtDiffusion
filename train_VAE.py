@@ -1,27 +1,27 @@
 # %%
-from training_utils import TrainingConfig, make_dataloader, set_seed, VAETrainer, count_parameters
+from ProtDiffusion.training_utils import VAETrainingConfig, make_dataloader, set_seed, VAETrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 
 from datasets import load_from_disk
 
-from New1D.autoencoder_kl_1d import AutoencoderKL1D
+from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
 
 import os
 
-config = TrainingConfig(
-    num_epochs=20,  # the number of epochs to train for
+config = VAETrainingConfig(
+    num_epochs=2000,  # the number of epochs to train for
     batch_size=16,
     mega_batch=1000,
     gradient_accumulation_steps=16,
     learning_rate = 1e-4,
     lr_warmup_steps = 100,
     kl_warmup_steps = 100,
-    save_image_model_steps=300,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v11.1"),  # the model name locally and on the HF Hub
+    save_image_model_steps=100,
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v18.3"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
-    max_len=16384 , # 512 * 2**6
-    max_len_start=16384,
+    max_len=2048, # 512 * 2**6
+    max_len_start=2048,
     max_len_doubling_steps=100,
     ema_decay=0.9999,
     ema_update_after=100,
@@ -29,11 +29,11 @@ config = TrainingConfig(
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted_encoded_grouped')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v1.2.json")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.2
@@ -56,19 +56,28 @@ print(f"Test dataset length: {len(test_dataset)}")
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
 num_workers = 16
-train_dataloader = make_dataloader(config, train_dataset, 
-                                      max_len=config.max_len_start, 
-                                      num_workers=num_workers,
+train_dataloader = make_dataloader(config, 
+                                   train_dataset,
+                                   tokenizer=tokenizer,
+                                   max_len=config.max_len_start,
+                                   num_workers=num_workers,
 )
-val_dataloader = make_dataloader(config, val_dataset, 
-                                    max_len=config.max_len, 
-                                    num_workers=1,
+val_dataloader = make_dataloader(config, 
+                                 val_dataset, 
+                                 tokenizer=tokenizer,
+                                 max_len=config.max_len, 
+                                 num_workers=1,
 )
-test_dataloader = make_dataloader(config, test_dataset,
-                                      max_len=config.max_len, 
-                                      num_workers=1,
+test_dataloader = make_dataloader(config,
+                                  test_dataset,
+                                  tokenizer=tokenizer,
+                                  max_len=config.max_len, 
+                                  num_workers=1,
 )
 print("length of train dataloader: ", len(train_dataloader))
+print("length of val dataloader: ", len(val_dataloader))
+print("length of test dataloader: ", len(test_dataloader))
+
 # %%
 model = AutoencoderKL1D(
     num_class_embeds=tokenizer.vocab_size,  # the number of class embeddings
@@ -97,6 +106,7 @@ model = AutoencoderKL1D(
     num_attention_heads=1,  # the number of attention heads in the spatial self-attention blocks
     upsample_type="conv", # the type of upsampling to use, either 'conv' (and nearest neighbor) or 'conv_transpose'
     act_fn="swish",  # the activation function to use
+    padding_idx=tokenizer.pad_token_id,  # the padding index
 )
 count_parameters(model) # Count the parameters of the model and print
 
@@ -110,5 +120,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train_loop(from_checkpoint='/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v11.0/Epoch_19')
-    Trainer.save_pretrained()
+    Trainer.train(from_checkpoint='/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v18.1/checkpoints/checkpoint_133')

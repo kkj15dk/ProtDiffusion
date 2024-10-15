@@ -174,7 +174,6 @@ class SelfAttention1d(nn.Module):
         if attention_mask is not None:
             # attention_mask of shape (B, T)
             attention_mask = attention_mask.unsqueeze(1).unsqueeze(1) # (B, 1, 1, T)
-            # attention_mask = attention_mask.unsqueeze(-1) # (B, 1, T, 1)
             attention_mask = attention_mask.expand(batch, self.num_heads, seq, seq)
             attention_scores = attention_scores.masked_fill(attention_mask == 0, float('-inf'))
         attention_probs = torch.softmax(attention_scores, dim=-1)
@@ -265,13 +264,16 @@ class ResnetBlock1D(nn.Module):
 
     def forward(self, 
                 input_tensor: torch.Tensor, 
-                temb: torch.Tensor,
+                temb: Optional[torch.Tensor] = None,
+                attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
 
         hidden_states = input_tensor
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.nonlinearity(hidden_states)
         hidden_states = self.conv1(hidden_states)
+        if attention_mask is not None:
+            hidden_states = hidden_states * attention_mask.unsqueeze(1) # TODO: second added 13/10
 
         if self.time_emb_proj is not None:
             if not self.skip_time_act:
@@ -289,9 +291,13 @@ class ResnetBlock1D(nn.Module):
 
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.conv2(hidden_states)
+        if attention_mask is not None:
+            hidden_states = hidden_states * attention_mask.unsqueeze(1) # TODO: second added 13/10
 
         if self.conv_shortcut is not None:
             input_tensor = self.conv_shortcut(input_tensor)
+            if attention_mask is not None:
+                input_tensor = input_tensor * attention_mask.unsqueeze(1) # TODO: second added 13/10
 
         output_tensor = (input_tensor + hidden_states) / self.output_scale_factor
 
@@ -380,7 +386,11 @@ class UNetMidBlock1D(nn.Module):
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
             if attn is not None:
                 hidden_states = attn(hidden_states, attention_mask)
-            hidden_states = resnet(hidden_states, temb)
+                if attention_mask is not None:
+                    hidden_states = hidden_states * attention_mask.unsqueeze(1) # TODO: second added 13/10
+            hidden_states = resnet(hidden_states, temb, attention_mask)
+            if attention_mask is not None:
+                hidden_states = hidden_states * attention_mask.unsqueeze(1) # TODO: second added 13/10
 
         return hidden_states
 
@@ -478,7 +488,7 @@ class AttnDownBlock1D(nn.Module):
         output_states = ()
 
         for resnet, attn in zip(self.resnets, self.attentions):
-            hidden_states = resnet(hidden_states, temb)
+            hidden_states = resnet(hidden_states, temb, attention_mask)
             hidden_states = attn(hidden_states, attention_mask)
             output_states = output_states + (hidden_states,)
 
@@ -626,15 +636,15 @@ class DownEncoderBlock1D(nn.Module):
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
 
         for resnet in self.resnets:
-            hidden_states = resnet(hidden_states, temb=None)
+            hidden_states = resnet(hidden_states, temb=None, attention_mask=attention_mask)
+            if attention_mask is not None:
+                hidden_states = hidden_states * attention_mask.unsqueeze(1) # TODO: second added 13/10
 
         if self.downsamplers is not None: # Downsample the hidden states
             for downsampler in self.downsamplers:
                 hidden_states = downsampler(hidden_states)
-            if attention_mask is not None: # Downsample the attention mask by taking every other element, starting from the first element
-                attention_mask = attention_mask[:, ::2]
 
-        return hidden_states, attention_mask
+        return hidden_states
 
 # Done
 class AttnDownEncoderBlock1D(nn.Module):
@@ -804,7 +814,7 @@ class AttnUpBlock1D(nn.Module):
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
                 if self.upsample_type == "resnet":
-                    hidden_states = upsampler(hidden_states, temb=temb)
+                    hidden_states = upsampler(hidden_states, temb=temb, attention_mask=attention_mask)
                 else:
                     hidden_states = upsampler(hidden_states)
 
@@ -815,7 +825,7 @@ class AttnUpBlock1D(nn.Module):
 
             hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
-            hidden_states = resnet(hidden_states, temb)
+            hidden_states = resnet(hidden_states, temb, attention_mask)
             hidden_states = attn(hidden_states, attention_mask)
 
         return hidden_states
@@ -983,9 +993,13 @@ class UpDecoderBlock1D(nn.Module):
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
                 hidden_states = upsampler(hidden_states)
+                if attention_mask is not None:
+                    hidden_states = hidden_states * attention_mask.unsqueeze(1) # TODO: second added 13/10
 
         for resnet in self.resnets:
-            hidden_states = resnet(hidden_states, temb=None)
+            hidden_states = resnet(hidden_states, temb=None, attention_mask=attention_mask)
+            if attention_mask is not None:
+                hidden_states = hidden_states * attention_mask.unsqueeze(1) # TODO: second added 13/10
 
         return hidden_states
 

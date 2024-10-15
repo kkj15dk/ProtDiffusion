@@ -19,7 +19,7 @@ config = ProtDiffusionTrainingConfig(
     lr_warmup_steps = 100,
     kl_warmup_steps = 100,
     save_image_model_steps=5000,
-    output_dir=os.path.join("output","ProtDiffusion-UniRef50_v1.1"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v1.1"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=2048, # 512 * 2**6
@@ -31,7 +31,8 @@ config = ProtDiffusionTrainingConfig(
 )
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
+# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/PKSs_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%

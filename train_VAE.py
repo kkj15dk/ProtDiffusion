@@ -1,39 +1,40 @@
 # %%
-from training_utils import TrainingConfig, make_dataloader, set_seed, VAETrainer, count_parameters
+from ProtDiffusion.training_utils import VAETrainingConfig, make_dataloader, set_seed, VAETrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 
 from datasets import load_from_disk
 
-from New1D.autoencoder_kl_1d import AutoencoderKL1D
+from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
 
 import os
 
-config = TrainingConfig(
-    num_epochs=2,  # the number of epochs to train for
-    batch_size=64,
+config = VAETrainingConfig(
+    num_epochs=3,  # the number of epochs to train for
+    batch_size=32, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
     mega_batch=1000,
     gradient_accumulation_steps=16,
-    learning_rate=8e-5,
+    learning_rate=1e-5,
     lr_warmup_steps=1000,
     kl_warmup_steps=2000,
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v8.0"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v9.0"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
-    max_len=32768, # 512 * 2**6
-    max_len_start=32768,
+    max_len=8192, # 512 * 16 ((2**4))
+    max_len_start=8192,
     max_len_doubling_steps=10000,
     ema_decay=0.9999,
-    ema_update_after=3000,
+    ema_update_after=100,
     ema_update_every=10,
 )
+print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/work3/s204514/UniRef50_encoded_grouped')
+dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("kkj15dk/protein_tokenizer")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.0002
@@ -56,19 +57,28 @@ print(f"Test dataset length: {len(test_dataset)}")
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
 num_workers = 16
-train_dataloader = make_dataloader(config, train_dataset, 
-                                      max_len=config.max_len_start, 
-                                      num_workers=num_workers,
+train_dataloader = make_dataloader(config, 
+                                   train_dataset,
+                                   tokenizer=tokenizer,
+                                   max_len=config.max_len_start,
+                                   num_workers=num_workers,
 )
-val_dataloader = make_dataloader(config, val_dataset, 
-                                    max_len=config.max_len, 
-                                    num_workers=1,
+val_dataloader = make_dataloader(config, 
+                                 val_dataset, 
+                                 tokenizer=tokenizer,
+                                 max_len=config.max_len, 
+                                 num_workers=1,
 )
-test_dataloader = make_dataloader(config, test_dataset,
-                                      max_len=config.max_len, 
-                                      num_workers=1,
+test_dataloader = make_dataloader(config,
+                                  test_dataset,
+                                  tokenizer=tokenizer,
+                                  max_len=config.max_len, 
+                                  num_workers=1,
 )
 print("length of train dataloader: ", len(train_dataloader))
+print("length of val dataloader: ", len(val_dataloader))
+print("length of test dataloader: ", len(test_dataloader))
+
 # %%
 model = AutoencoderKL1D(
     num_class_embeds=tokenizer.vocab_size,  # the number of class embeddings
@@ -97,6 +107,7 @@ model = AutoencoderKL1D(
     num_attention_heads=1,  # the number of attention heads in the spatial self-attention blocks
     upsample_type="conv", # the type of upsampling to use, either 'conv' (and nearest neighbor) or 'conv_transpose'
     act_fn="swish",  # the activation function to use
+    padding_idx=tokenizer.pad_token_id,  # the padding index
 )
 count_parameters(model) # Count the parameters of the model and print
 
@@ -110,4 +121,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train_loop()
+    Trainer.train()

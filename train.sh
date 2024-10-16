@@ -30,4 +30,4 @@ module load python3/3.12.4
 source .venv/bin/activate
 
 # here follow the commands you want to execute
-accelerate launch ProtDiffusion/ProtDiffusion/main.py
+accelerate launch ProtDiffusion/train_VAE.py

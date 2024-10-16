@@ -56,7 +56,8 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     @register_to_config
     def __init__(
         self,
-        num_class_embeds: int = None,  # the number of class embeddings
+        num_class_embeds: int,  # the number of class embeddings
+        out_channels: int = None, 
         down_block_types: Tuple[str] = ("DownEncoderBlock1D",),
         up_block_types: Tuple[str] = ("UpDecoderBlock1D",),
         mid_block_type: str = "UNetMidBlock1D",
@@ -83,6 +84,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     ):
         super().__init__()
         self.pad_to_multiple_of = pad_to_multiple_of
+        self.out_channels = out_channels or num_class_embeds
 
         # pass init params to Encoder
         self.encoder = Encoder1D(
@@ -122,7 +124,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.post_quant_conv = nn.Conv1d(latent_channels, latent_channels, 1) if use_post_quant_conv else None
 
         self.embedding_in = nn.Embedding(num_class_embeds, block_out_channels[0], padding_idx=padding_idx)
-        self.conv_out = nn.Conv1d(block_out_channels[0], num_class_embeds, 1)
+        self.conv_out = nn.Conv1d(block_out_channels[0], self.out_channels, 1)
 
 
     def _set_gradient_checkpointing(self, module, value=False):

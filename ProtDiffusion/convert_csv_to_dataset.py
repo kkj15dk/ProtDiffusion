@@ -3,7 +3,6 @@ from datasets import load_dataset, load_from_disk, Dataset
 from tqdm import tqdm
 import os
 import pandas as pd
-from transformers import PreTrainedTokenizerFast
 from training_utils import round_length
 
 # %%
@@ -110,7 +109,7 @@ else:
     print(f"{filename_encoded} already encoded")
 
 # %%
-# Group by the id column and aggregate the input_ids, labels, and lengths
+# Group by the id column and aggregate the sequences, labels, and lengths
 if not os.path.exists(f'{output_path}{filename_grouped}_grouped'):
     print(f"Grouping {filename_grouped}")
     dataset = load_from_disk(f'{output_path}{filename_encoded}')

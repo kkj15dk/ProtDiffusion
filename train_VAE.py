@@ -9,34 +9,35 @@ from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
 import os
 
 config = VAETrainingConfig(
-    num_epochs=2000,  # the number of epochs to train for
-    batch_size=16,
+    num_epochs=3,  # the number of epochs to train for
+    batch_size=32, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
     mega_batch=1000,
     gradient_accumulation_steps=16,
-    learning_rate = 1e-4,
-    lr_warmup_steps = 100,
-    kl_warmup_steps = 100,
-    save_image_model_steps=100,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v18.3"),  # the model name locally and on the HF Hub
+    learning_rate=1e-5,
+    lr_warmup_steps=1000,
+    kl_warmup_steps=2000,
+    save_image_model_steps=10000,
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v9.0"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
-    max_len=2048, # 512 * 2**6
-    max_len_start=2048,
-    max_len_doubling_steps=100,
+    max_len=8192, # 512 * 16 ((2**4))
+    max_len_start=8192,
+    max_len_doubling_steps=10000,
     ema_decay=0.9999,
     ema_update_after=100,
     ema_update_every=10,
 )
+print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
+dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.2
+train_test_split_ratio = 0.0002
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 temp_dataset = train_val_test_split['test']
@@ -120,4 +121,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v18.1/checkpoints/checkpoint_133')
+    Trainer.train()

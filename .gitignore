@@ -20,3 +20,5 @@ ProtDiffusion/dataset/grouped_data
 output
 *.csv
 IDA_IDs.txt
+
+IDA_IDs.txt

@@ -24,7 +24,7 @@ config = VAETrainingConfig(
     max_len_start=8192,
     max_len_doubling_steps=10000,
     ema_decay=0.9999,
-    ema_update_after=100,
+    ema_update_after=1000,
     ema_update_every=10,
 )
 print("Output dir: ", config.output_dir)
@@ -55,8 +55,8 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-print("setting num_workers to 16")
-num_workers = 16
+print("setting num_workers to 12")
+num_workers = 12
 train_dataloader = make_dataloader(config, 
                                    train_dataset,
                                    tokenizer=tokenizer,

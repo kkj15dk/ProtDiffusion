@@ -185,7 +185,7 @@ def make_dataloader(config: VAETrainingConfig,
                            drop_last=drop_last,
                            num_workers=num_workers,
     )
-    
+
     clustered_dataset = ClusteredDataset(dataset, 
                                         id_key=id_key,
                                         length_key=length_key,
@@ -193,7 +193,7 @@ def make_dataloader(config: VAETrainingConfig,
                                         sequence_key=sequence_key,
                                         pad_to_multiple_of=pad_to_multiple_of,
     )
-    
+
     dataloader = DataLoader(clustered_dataset,
                             batch_sampler=sampler, 
                             collate_fn=sampler.collate_fn,
@@ -245,7 +245,7 @@ class ClusteredDataset(Dataset):
 
         data = self.dataset[clusterindex]
 
-        id = data['id']
+        id = data[self.id_key]
         length = []
         label = []
         sequence = []

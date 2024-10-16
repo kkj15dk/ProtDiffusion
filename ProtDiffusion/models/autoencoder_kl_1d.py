@@ -57,7 +57,6 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     def __init__(
         self,
         num_class_embeds: int,  # the number of class embeddings
-        out_channels: int = None, 
         down_block_types: Tuple[str] = ("DownEncoderBlock1D",),
         up_block_types: Tuple[str] = ("UpDecoderBlock1D",),
         mid_block_type: str = "UNetMidBlock1D",
@@ -84,7 +83,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     ):
         super().__init__()
         self.pad_to_multiple_of = pad_to_multiple_of
-        self.out_channels = out_channels or num_class_embeds
+        self.padding_idx = padding_idx
 
         # pass init params to Encoder
         self.encoder = Encoder1D(
@@ -123,8 +122,8 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.quant_conv = nn.Conv1d(2 * latent_channels, 2 * latent_channels, 1) if use_quant_conv else None
         self.post_quant_conv = nn.Conv1d(latent_channels, latent_channels, 1) if use_post_quant_conv else None
 
-        self.embedding_in = nn.Embedding(num_class_embeds, block_out_channels[0], padding_idx=padding_idx)
-        self.conv_out = nn.Conv1d(block_out_channels[0], self.out_channels, 1)
+        self.embedding_in = nn.Embedding(num_class_embeds, block_out_channels[0], padding_idx=self.padding_idx)
+        self.conv_out = nn.Conv1d(block_out_channels[0], num_class_embeds, 1)
 
 
     def _set_gradient_checkpointing(self, module, value=False):
@@ -214,7 +213,7 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         input_ids: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         
-        ce_loss = nn.functional.cross_entropy(output.sample, input_ids, reduction='none') # B, L
+        ce_loss = nn.functional.cross_entropy(output.sample, input_ids, reduction='none', ignore_index=self.padding_idx) # B, L
         if output.attention_masks[0] is not None:
             ce_loss = ce_loss * output.attention_masks[0] # B, L
             ce_loss = torch.sum(ce_loss) / output.attention_masks[0].sum()

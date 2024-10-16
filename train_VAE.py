@@ -33,7 +33,7 @@ dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kaspe/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.0002
@@ -54,8 +54,8 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-print("setting num_workers to 16")
-num_workers = 16
+print("setting num_workers to 12")
+num_workers = 12
 train_dataloader = make_dataloader(config, 
                                    train_dataset,
                                    tokenizer=tokenizer,

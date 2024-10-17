@@ -5,6 +5,7 @@ import sys, errno, re, json, ssl, os
 from urllib import request
 from urllib.error import HTTPError
 from time import sleep
+from tqdm import tqdm
 
 # Script to download all PKSs with a specific InterPro domain architecture (IDA) (with KS, AT and ACP. Without Adenylation domain, ABC transporter, choline acyltransferase, aminotransferase, PKS docking domain, NMO, or condensation domains) from InterPro.
 
@@ -177,7 +178,7 @@ if __name__ == "__main__":
   ida_ids = [id.rstrip('\n') for id in f.readlines()]
   with open(OUTPUT_FILE, "a")as output_handle:
     output_handle.write("clusterid,proteinid,familytaxonid,sequence\n")
-  for id in ida_ids:
+  for id in tqdm(ida_ids, desc="Downloading using IDA IDs"):
     if id == "N/A":
       print("Missing id on line " + str(ida_ids.index(id)) + " continuing")
       continue

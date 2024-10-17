@@ -9,13 +9,13 @@ from ProtDiffusion.training_utils import round_length
 # %%
 # Define the parameters
 sequence_key = 'sequence'
-id_key = 'clusterid' # This is the column to group by
+id_key = 'cluster100id' # This is the column to group by
 label_key = 'familytaxonid'
 pad_to_multiple_of = 16
 output_path = '/home/kaspe/ProtDiffusion/datasets/'
 input_path = '/home/kaspe/ProtDiffusion/datasets/UniRefALL_sorted.csv' # Has to be sorted by id
 filename_encoded = 'UniRefALL'
-filename_grouped = 'UniRef50'
+filename_grouped = 'UniRef90'
 
 # %%
 # Define the transformation function for batches
@@ -50,6 +50,7 @@ def stream_groupby_gen(dataset: Dataset,
         })
 
     # Tell pandas to read the data in chunks
+    assert id_key in dataset.column_names, f"{id_key} not in dataset columns"
     chunks = dataset.rename_column(id_key, 'id').select_columns(['id','label','length','sequence']).to_pandas(batched=True, batch_size=chunk_size)
     
     orphans = pd.DataFrame()
@@ -83,10 +84,10 @@ def stream_groupby_gen(dataset: Dataset,
 dataset = load_dataset('csv', data_files=input_path)['train']
 
 # %%
-dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
-dataset = dataset.rename_column(' sequence', 'sequence')
-dataset = dataset.rename_column(' cluster90id', 'cluster90id')
-dataset = dataset.rename_column(' cluster100id', 'cluster100id')
+# dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
+# dataset = dataset.rename_column(' sequence', 'sequence')
+# dataset = dataset.rename_column(' cluster90id', 'cluster90id')
+# dataset = dataset.rename_column(' cluster100id', 'cluster100id')
 
 # %%
 # filter so that only sequences with ACDEFGHIKLMNOPQRSTUVWY are included

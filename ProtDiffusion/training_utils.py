@@ -30,6 +30,8 @@ from Bio.SeqRecord import SeqRecord
 from tqdm import tqdm
 import json
 
+import ot
+
 from .models.autoencoder_kl_1d import AutoencoderKL1D
 from .models.dit_transformer_1d import DiTTransformer1DModel
 from .models.pipeline_protein import ProtDiffusionPipeline, logits_to_token_ids
@@ -158,6 +160,33 @@ def calculate_stats(averages: List[int], standard_deviations: List[int], num_ele
     standard_dev = np.sqrt(variance / (sum(num_elements) - len(num_elements))) # TODO: Check if this is correct, maybe it should be -1 instead of -len(residues_in_group)
 
     return mu, standard_dev
+
+def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor
+    ) -> torch.Tensor: # TODO: make the for loop faster (AKA, don't use a for loop, you dingus)
+    '''
+    Reorder the noise tensor to have pairings for optimal transport with respect to the latent tensor.
+    returns the noise tensor reordered.
+    '''
+    B, C, L = latent.shape
+
+    xs = latent.view(B, -1)
+    xt = noise.view(B, -1)
+
+    a, b = torch.ones((B,)) / B, torch.ones((B,)) / B  # uniform distribution on samples
+
+    # loss matrix
+    M = ot.dist(xs, xt)
+    G0 = ot.emd(a, b, M)
+    bool_g = (G0*B).to(dtype=torch.bool)
+
+    sorted_xt = torch.zeros_like(xt)
+    for i in range(B):
+            for j in range(B):
+                if bool_g[i, j]:
+                    sorted_xt[i] = xt[j]
+
+    noise = sorted_xt.reshape(B, C, L)
+    return noise
 
 def make_dataloader(config: VAETrainingConfig,
                         dataset: Dataset,
@@ -798,14 +827,14 @@ class ProtDiffusionTrainingConfig:
 
     cutoff: Optional[float] = None # cutoff for when to predict the token given the logits, and when to assign the unknown token 'X' to this position
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
-    kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
-    kl_warmup_steps: Optional[int] = None # the number of steps to warm up the KL divergence weight
 
     gradient_clip_val: Optional[float] = 5.0  # the value to clip the gradients to
     weight_decay: float = 0.01 # weight decay for the optimizer
     ema_decay: float = 0.9999 # the decay rate for the EMA
     ema_update_after: int = 1000 # the number of steps to wait before updating the EMA
     ema_update_every: int = 1 # the number of steps to wait before updating the EMA
+
+    use_batch_optimal_transport: bool = True # whether to use optimal transport for the batch to reorder the noise
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -1040,7 +1069,7 @@ class ProtDiffusionTrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable=True) # not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
@@ -1058,6 +1087,8 @@ class ProtDiffusionTrainer:
 
                 # Sample noise to add to the images
                 noise = torch.randn(latent.shape, device=latent.device)
+                if self.config.use_batch_optimal_transport:
+                    noise = reorder_noise_for_OT(latent, noise)
                 noise = noise * attention_mask.unsqueeze(1) # Mask the noise
                 bs = latent.shape[0]
 
@@ -1070,7 +1101,7 @@ class ProtDiffusionTrainer:
                 # Add noise to the clean images according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
-                noisy_latent = self.noise_scheduler.scale_model_input(noisy_latent, timesteps) # TODO: Find out if this is necessary
+                # noisy_latent = self.noise_scheduler.scale_model_input(noisy_latent, timesteps) # TODO: Find out if this is necessary
 
                 # Gradient accumulation
                 with self.accelerator.accumulate(self.transformer):

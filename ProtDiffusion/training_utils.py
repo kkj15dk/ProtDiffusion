@@ -860,10 +860,10 @@ class ProtDiffusionTrainer:
                  transformer: DiTTransformer1DModel,
                  vae: AutoencoderKL1D, 
                  tokenizer: PreTrainedTokenizerFast, 
-                 train_dataloader: DataLoader, 
-                 val_dataloader: DataLoader, 
                  config: ProtDiffusionTrainingConfig, 
-                 test_dataloader: DataLoader = None,
+                 train_dataloader: DataLoader, 
+                 val_dataloader: Optional[DataLoader] = None, 
+                 test_dataloader: Optional[DataLoader] = None,
                  training_variables: Optional[TrainingVariables] = None,
 
                  noise_scheduler: KarrasDiffusionSchedulers = None, # the scheduler to use for the diffusion
@@ -913,9 +913,13 @@ class ProtDiffusionTrainer:
         # Prepare everything
         # There is no specific order to remember, you just need to unpack the
         # objects in the same order you gave them to the prepare method.
-        self.transformer, self.vae, self.optimizer, self.train_dataloader, self.test_dataloader, self.val_dataloader, self.lr_scheduler = self.accelerator.prepare(
-            transformer, vae, optimizer, train_dataloader, test_dataloader, val_dataloader, lr_scheduler
+        self.transformer, self.vae, self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
+            transformer, vae, optimizer, train_dataloader, lr_scheduler
         )
+        if test_dataloader is not None:
+            self.test_dataloader = self.accelerator.prepare(test_dataloader)
+        if val_dataloader is not None:
+            self.val_dataloader = self.accelerator.prepare(val_dataloader)
         self.vae.eval() # Set the VAE to eval mode
         self.accelerator.register_for_checkpointing(self.training_variables)
 

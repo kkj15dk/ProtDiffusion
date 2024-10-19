@@ -610,7 +610,7 @@ class VAETrainer:
             # Save all samples as a FASTA file
             seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
                             description=
-                            f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.2f}")
+                            f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.3f}")
                             for i, seq in enumerate(seqs_pred)]
 
             with open(f"{test_dir}/{name}.fa", "a") as f:
@@ -772,12 +772,13 @@ class VAETrainer:
                         self.accelerator.save_state()
                     self.model.train() # Make sure the model is in train mode
                 
-                # if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
-                #     self.accelerator_config.automatic_checkpoint_naming = False
-                #     self.accelerator.save_state(
-                #             output_dir=os.path.join(self.config.output_dir, f"Epoch_{epoch}")
-                #         )
-                #     self.accelerator_config.automatic_checkpoint_naming = True
+                self.accelerator.wait_for_everyone()
+                if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
+                    self.accelerator_config.automatic_checkpoint_naming = False
+                    self.accelerator.save_state(
+                            output_dir=os.path.join(self.config.output_dir, f"Epoch_{epoch}")
+                        )
+                    self.accelerator_config.automatic_checkpoint_naming = True
 
         self.accelerator.end_training()
         self.save_pretrained()

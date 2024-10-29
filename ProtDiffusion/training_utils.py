@@ -13,6 +13,7 @@ from datasets import Dataset
 import os
 import numpy as np
 import gc
+from copy import deepcopy
 
 from dataclasses import dataclass
 from typing import Optional, Union, List
@@ -28,7 +29,6 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from tqdm import tqdm
-import json
 
 import ot
 
@@ -189,16 +189,17 @@ def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor
     return noise
 
 def make_dataloader(config: VAETrainingConfig,
-                        dataset: Dataset,
-                        tokenizer: PreTrainedTokenizerFast,
-                        max_len: int,
-                        id_key: str = 'id',
-                        length_key: str = 'length',
-                        label_key: str = 'label',
-                        sequence_key: str = 'sequence',
-                        pad_to_multiple_of: int = 16,
-                        drop_last: bool = False,
-                        num_workers: int = 1,
+                    dataset: Dataset,
+                    tokenizer: PreTrainedTokenizerFast,
+                    max_len: int,
+                    id_key: str = 'id',
+                    length_key: str = 'length',
+                    label_key: str = 'label',
+                    sequence_key: str = 'sequence',
+                    pad_to_multiple_of: int = 16,
+                    drop_last: bool = False,
+                    num_workers: int = 1,
+                    generator: Optional[torch.Generator] = None,
 ) -> DataLoader:
 
     sampler = BatchSampler(dataset,
@@ -213,20 +214,22 @@ def make_dataloader(config: VAETrainingConfig,
                            pad_to_multiple_of=pad_to_multiple_of,
                            drop_last=drop_last,
                            num_workers=num_workers,
+                           generator=generator,
     )
 
     clustered_dataset = ClusteredDataset(dataset, 
-                                        id_key=id_key,
-                                        length_key=length_key,
-                                        label_key=label_key,
-                                        sequence_key=sequence_key,
-                                        pad_to_multiple_of=pad_to_multiple_of,
+                                         id_key=id_key,
+                                         length_key=length_key,
+                                         label_key=label_key,
+                                         sequence_key=sequence_key,
+                                         pad_to_multiple_of=pad_to_multiple_of,
     )
 
     dataloader = DataLoader(clustered_dataset,
                             batch_sampler=sampler, 
                             collate_fn=sampler.collate_fn,
                             num_workers=num_workers,
+                            generator=generator,
     )
     return dataloader
 
@@ -303,7 +306,9 @@ class BatchSampler(Sampler):
                  sequence_key: str = 'input_ids',
                  pad_to_multiple_of: int = 16,
                  drop_last: bool = True,
-                 num_workers: int = 1):
+                 num_workers: int = 1,
+                 generator: Optional[torch.Generator] = None,
+    ):
         self.tokenizer = tokenizer
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
@@ -316,6 +321,7 @@ class BatchSampler(Sampler):
         self.pad_to_multiple_of = pad_to_multiple_of
         self.dataset = dataset
         self.num_workers = num_workers
+        self.generator = generator
 
     def collate_fn(self, batch):
         '''
@@ -354,7 +360,7 @@ class BatchSampler(Sampler):
             seq_len = item[self.length_key]
 
             if seq_len > max_len:
-                index = random.randint(0, seq_len - max_len)
+                index = torch.randint(0, seq_len - max_len, (1,), generator=self.generator).item()
                 sequence.append(seq[index:index+max_len])
             else:
                 sequence.append(seq)
@@ -384,8 +390,10 @@ class BatchSampler(Sampler):
 
     def __iter__(self):
         size = len(self.dataset)
-        indices = list(range(size))
-        random.shuffle(indices)
+        # # old implementation
+        # indices = list(range(size))
+        # random.shuffle(indices)
+        indices = torch.randperm(size, generator=self.generator).tolist()
 
         step = self.mega_batch_size * self.batch_size
         for i in range(0, size, step):
@@ -412,8 +420,8 @@ class BatchSampler(Sampler):
 
             # # old implementation
             # pool_lengths = [self.dataset[i]['length'] for i in pool_indices]
-
-            sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths]
+            sample_indices = [torch.randint(0, len(lenlist), (1,), generator=self.generator).item() for lenlist in pool_lengths]
+            # sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths] # New old implementation
             pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
 
             # Zip indices with sample indices and sort by length more efficiently
@@ -422,9 +430,10 @@ class BatchSampler(Sampler):
 
             pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
 
-            mega_batch_indices = list(range(0, len(pool), self.batch_size))
-            random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
-
+            # # old implementation
+            # mega_batch_indices = list(range(0, len(pool), self.batch_size))
+            # random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
+            mega_batch_indices = torch.randperm((len(pool) // self.batch_size) + 1, generator=self.generator).tolist()
             for j in mega_batch_indices:
                 if self.drop_last and j + self.batch_size > len(pool): # drop the last batch if it's too small
                     continue
@@ -804,8 +813,9 @@ class ProtDiffusionTrainingConfig:
     num_epochs: int = 1  # the number of epochs to train the model
     gradient_accumulation_steps: int = 2  # the number of steps to accumulate gradients before taking an optimizer step
     learning_rate: float = 1e-4  # the learning rate
-    lr_warmup_steps:int  = 1000
-    save_image_model_steps:int  = 1000
+    lr_warmup_steps: int  = 1000
+    save_image_model_steps: int  = 1000
+    save_every_epoch: bool = False  # whether to save the model every epoch
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision #TODO: implement fully
     optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`
     SGDmomentum: Optional[float] = 0.9
@@ -944,8 +954,76 @@ class ProtDiffusionTrainer:
             if p.requires_grad and p.grad is not None:
                 p.grad.data = p.grad.data / n_tokens
 
-    @torch.no_grad()
     def evaluate(self,
+                 model,
+                 dataloader,
+                 generator: Optional[torch.Generator] = None,
+    ):
+        progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
+
+        running_loss = 0.0
+
+        for step, batch in enumerate(dataloader):
+            if step == 0:
+                print(f"evaluate step 1 id: {batch['id']}")
+
+            input_ids = batch['input_ids']
+            attention_mask = batch['attention_mask']
+
+            vae_encoded = self.vae.encode(x = input_ids,
+                                          attention_mask = attention_mask,
+            )
+
+            attention_mask = vae_encoded.attention_masks[-1]
+            latent = vae_encoded.latent_dist.sample() # Mode is deterministic TODO: .sample() or .mode()?
+            label = batch['label']
+
+            # Sample noise to add to the images
+            noise = torch.randn(
+                latent.shape, 
+                device=latent.device,
+                generator=generator,
+            )
+            if self.config.use_batch_optimal_transport:
+                noise = reorder_noise_for_OT(latent, noise)
+            noise = noise * attention_mask.unsqueeze(1) # Mask the noise
+            bs = latent.shape[0]
+
+            # Sample a random timestep for each image
+            timesteps = torch.randint(
+                0, self.noise_scheduler.config.num_train_timesteps, (bs,), device=latent.device,
+                dtype=torch.int64,
+                generator=generator,
+            )
+
+            # Add noise to the clean images according to the noise magnitude at each timestep
+            noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
+            input = noisy_latent.to(self.accelerator.device)
+            attention_mask = attention_mask.to(self.accelerator.device)
+
+            # Forward pass
+            output = model(hidden_states = input,
+                           attention_mask = attention_mask,
+                           timestep = timesteps,
+                           class_labels = label,
+            ).sample
+            
+            # Loss calculation
+            loss = F.mse_loss(output, noise, reduction='none').mean(dim=1) * attention_mask # Mean over the channel dimension, Mask the loss
+            loss = loss.sum() / attention_mask.sum() # Average the loss over the non-masked tokens
+
+            # Log the progress
+            running_loss += loss.item()
+            progress_bar.update(1)
+
+        val_loss = running_loss / len(dataloader)
+        logs = {"val_loss": val_loss,
+                "step": self.training_variables.global_step,
+        }
+        return logs
+
+    @torch.no_grad()
+    def inference_test(self,
                  pipeline: ProtDiffusionPipeline,
     ) -> dict:
         test_dir = os.path.join(self.config.output_dir, "samples")
@@ -1074,6 +1152,8 @@ class ProtDiffusionTrainer:
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
+                if step == 0:
+                    print(f"training step 1 id: {batch['id']}")
 
                 input_ids = batch['input_ids']
                 attention_mask = batch['attention_mask']
@@ -1154,25 +1234,51 @@ class ProtDiffusionTrainer:
                 if self.training_variables.global_step % self.config.max_len_doubling_steps == 0:
                     self.update_max_len()
 
+                # Evaluation and saving the model
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
-                    self.accelerator.wait_for_everyone()
                     
-                    pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
-
-                    self.evaluate(pipeline)
-
+                    # Test of inference
                     self.accelerator.wait_for_everyone()
+                    pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                    self.inference_test(pipeline)
+
+                    # Evaluation
+                    self.accelerator.wait_for_everyone()
+                    dataloader = deepcopy(self.val_dataloader)
+                    generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
+                    logs = self.evaluate(model = self.ema.ema_model,
+                                        dataloader = self.val_dataloader,
+                                        generator = generator,
+                    )
+                    del dataloader
+                    self.accelerator.log(logs, step=self.training_variables.global_step)
                     if self.accelerator.is_main_process:
                         self.accelerator.save_state()
                     self.transformer.train() # Make sure the model is in train mode
-                
-                # if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
-                #     self.accelerator_config.automatic_checkpoint_naming = False
-                #     self.accelerator.save_state(
-                #             output_dir=os.path.join(self.config.output_dir, f"Epoch_{epoch}")
-                #         )
-                #     self.accelerator_config.automatic_checkpoint_naming = True
 
+            # After every epoch
+            if self.config.save_every_epoch:
+            
+                # Test of inference
+                self.accelerator.wait_for_everyone()
+                pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                self.inference_test(pipeline)
+
+                # Evaluation
+                self.accelerator.wait_for_everyone()
+                dataloader = deepcopy(self.val_dataloader)
+                generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
+                logs = self.evaluate(model = self.ema.ema_model,
+                                     dataloader = self.val_dataloader,
+                                     generator = generator,
+                )
+                del dataloader
+                self.accelerator.log(logs, step=self.training_variables.global_step)
+                if self.accelerator.is_main_process:
+                    self.accelerator.save_state()
+                self.transformer.train() # Make sure the model is in train mode
+
+        # After training
         self.accelerator.end_training()
         self.save_pretrained()
 

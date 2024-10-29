@@ -2,6 +2,7 @@
 from ProtDiffusion.training_utils import ProtDiffusionTrainingConfig, make_dataloader, set_seed, ProtDiffusionTrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 from diffusers import DDPMScheduler
+import torch
 
 from datasets import load_from_disk
 
@@ -17,12 +18,13 @@ config = ProtDiffusionTrainingConfig(
     gradient_accumulation_steps=16,
     learning_rate = 1e-5,
     lr_warmup_steps = 200,
-    save_image_model_steps=320,
+    save_image_model_steps = 320,
+    save_every_epoch = True,
     output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v1.1"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
-    max_len=8192, # 512 * 2**6
-    max_len_start=8192,
+    max_len=4096, # 512 * 2**6
+    max_len_start=4096,
     max_len_doubling_steps=100,
     ema_decay=0.9999,
     ema_update_after=100,
@@ -30,6 +32,7 @@ config = ProtDiffusionTrainingConfig(
     use_batch_optimal_transport=True,
 )
 set_seed(config.seed) # Set the random seed for reproducibility
+generator = torch.Generator().manual_seed(config.seed)
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
 dataset = load_from_disk('/home/kaspe/ProtDiffusion/datasets/PKSs_grouped')
@@ -38,22 +41,44 @@ train_dataset = dataset.shuffle(config.seed)
 # %%
 tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kaspe/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 
+# Split the dataset into train and temp sets using the datasets library
+train_test_split_ratio = 0.2
+train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
+train_dataset = train_val_test_split['train']
+temp_dataset = train_val_test_split['test']
+
+# Split the temp set into validation and test sets using the datasets library
+val_test_split_ratio = 0.5
+val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
+val_dataset = val_test_split['train']
+test_dataset = val_test_split['test']
+
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-print("setting num_workers to 16")
-num_workers = 16
+print("setting num_workers to 12")
+num_workers = 12
 train_dataloader = make_dataloader(config, 
                                    train_dataset,
                                    tokenizer=tokenizer,
                                    max_len=config.max_len_start,
                                    num_workers=num_workers,
+                                   generator=generator,
 )
-print("length of train dataloader: ", len(train_dataloader))
+val_dataloader = make_dataloader(config, 
+                                 val_dataset, 
+                                 tokenizer=tokenizer,
+                                 max_len=config.max_len, 
+                                 num_workers=1,
+                                 generator=generator,
+)
 
-vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v18.1/pretrained/EMA')
+print("length of train dataloader: ", len(train_dataloader))
+print("length of val dataloader: ", len(val_dataloader))
+
+vae = AutoencoderKL1D.from_pretrained('/home/kaspe/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
 # %%
 transformer = DiTTransformer1DModel(
@@ -81,12 +106,12 @@ Trainer = ProtDiffusionTrainer(transformer=transformer,
                                vae=vae,
                                tokenizer=tokenizer,
                                train_dataloader=train_dataloader,
-                               val_dataloader=None,
+                               val_dataloader=val_dataloader,
                                test_dataloader=None,
                                config=config,
                                noise_scheduler = noise_scheduler, # the scheduler to use for the diffusion
-                               eval_seq_len = [8192, 8192, 4096, 4096, 1024, 1024], # the sequence lengths to evaluate on
-                               eval_class_labels = [0,1,0,1,0,1], # the class labels to evaluate on, should be a list the same length as the eval batch size
+                               eval_seq_len = [4096, 4096, 1024, 1024], # the sequence lengths to evaluate on
+                               eval_class_labels = [0,1,0,1], # the class labels to evaluate on, should be a list the same length as the eval batch size
                                eval_guidance_scale = 4.0, # the scale of the guidance for the diffusion
                                eval_num_inference_steps = 5, # the number of inference steps for the diffusion
 )

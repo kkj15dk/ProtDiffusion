@@ -1,5 +1,5 @@
 # %%
-from ProtDiffusion.training_utils import VAETrainingConfig, make_dataloader, set_seed, VAETrainer, count_parameters
+from ProtDiffusion.training_utils import VAETrainingConfig, make_clustered_dataloader, set_seed, VAETrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 
 from datasets import load_from_disk
@@ -57,19 +57,19 @@ print(f"Test dataset length: {len(test_dataset)}")
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 12")
 num_workers = 12
-train_dataloader = make_dataloader(config, 
+train_dataloader = make_clustered_dataloader(config, 
                                    train_dataset,
                                    tokenizer=tokenizer,
                                    max_len=config.max_len_start,
                                    num_workers=num_workers,
 )
-val_dataloader = make_dataloader(config, 
+val_dataloader = make_clustered_dataloader(config, 
                                  val_dataset, 
                                  tokenizer=tokenizer,
                                  max_len=config.max_len, 
                                  num_workers=1,
 )
-test_dataloader = make_dataloader(config,
+test_dataloader = make_clustered_dataloader(config,
                                   test_dataset,
                                   tokenizer=tokenizer,
                                   max_len=config.max_len, 

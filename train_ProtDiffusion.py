@@ -1,5 +1,5 @@
 # %%
-from ProtDiffusion.training_utils import ProtDiffusionTrainingConfig, make_dataloader, set_seed, ProtDiffusionTrainer, count_parameters
+from ProtDiffusion.training_utils import ProtDiffusionTrainingConfig, make_clustered_dataloader, set_seed, ProtDiffusionTrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 from diffusers import DDPMScheduler
 
@@ -59,27 +59,13 @@ print(f"Test dataset length: {len(test_dataset)}")
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
 num_workers = 16
-train_dataloader = make_dataloader(config, 
+train_dataloader = make_clustered_dataloader(config, 
                                    train_dataset,
                                    tokenizer=tokenizer,
                                    max_len=config.max_len_start,
                                    num_workers=num_workers,
 )
-val_dataloader = make_dataloader(config, 
-                                 val_dataset, 
-                                 tokenizer=tokenizer,
-                                 max_len=config.max_len, 
-                                 num_workers=1,
-)
-test_dataloader = make_dataloader(config,
-                                  test_dataset,
-                                  tokenizer=tokenizer,
-                                  max_len=config.max_len, 
-                                  num_workers=1,
-)
 print("length of train dataloader: ", len(train_dataloader))
-print("length of val dataloader: ", len(val_dataloader))
-print("length of test dataloader: ", len(test_dataloader))
 
 vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v18.1/pretrained/EMA')
 tokenizer = PreTrainedTokenizerFast.from_pretrained('/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1')
@@ -109,10 +95,10 @@ noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
 Trainer = ProtDiffusionTrainer(transformer=transformer,
                                vae=vae,
                                tokenizer=tokenizer,
-                               train_dataloader=train_dataloader,
-                               val_dataloader=val_dataloader,
                                config=config,
-                               test_dataloader=test_dataloader,
+                               train_dataloader=train_dataloader,
+                               val_dataloader=None,
+                               test_dataloader=None,
                                noise_scheduler = noise_scheduler, # the scheduler to use for the diffusion
                                eval_seq_len = [64, 64, 256, 256, 1024, 1024, 4096, 4096], # the sequence lengths to evaluate on
                                eval_class_labels = [0,1,0,1,0,1,0,1], # the class labels to evaluate on, should be a list the same length as the eval batch size

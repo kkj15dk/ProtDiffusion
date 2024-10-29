@@ -159,7 +159,49 @@ def calculate_stats(averages: List[int], standard_deviations: List[int], num_ele
 
     return mu, standard_dev
 
-def make_dataloader(config: VAETrainingConfig,
+def make_clustered_dataloader(config: VAETrainingConfig,
+                        dataset: Dataset,
+                        tokenizer: PreTrainedTokenizerFast,
+                        max_len: int,
+                        id_key: str = 'id',
+                        length_key: str = 'length',
+                        label_key: str = 'label',
+                        sequence_key: str = 'sequence',
+                        pad_to_multiple_of: int = 16,
+                        drop_last: bool = False,
+                        num_workers: int = 1,
+) -> DataLoader:
+
+    sampler = BatchSampler(dataset,
+                           tokenizer,
+                           config.batch_size,
+                           config.mega_batch,
+                           max_length=max_len,
+                           id_key=id_key,
+                           length_key=length_key,
+                           label_key=label_key,
+                           sequence_key=sequence_key,
+                           pad_to_multiple_of=pad_to_multiple_of,
+                           drop_last=drop_last,
+                           num_workers=num_workers,
+    )
+
+    clustered_dataset = ClusteredDataset(dataset, 
+                                        id_key=id_key,
+                                        length_key=length_key,
+                                        label_key=label_key,
+                                        sequence_key=sequence_key,
+                                        pad_to_multiple_of=pad_to_multiple_of,
+    )
+
+    dataloader = DataLoader(clustered_dataset,
+                            batch_sampler=sampler, 
+                            collate_fn=sampler.collate_fn,
+                            num_workers=num_workers,
+    )
+    return dataloader
+
+def make_normal_dataloader(config: VAETrainingConfig,
                         dataset: Dataset,
                         tokenizer: PreTrainedTokenizerFast,
                         max_len: int,
@@ -349,7 +391,7 @@ class BatchSampler(Sampler):
             'input_ids': input_ids,
             'attention_mask': attention_mask,
         }
-    
+
     def get_lengths(self, indices, return_dict, process_id):
         return_dict[process_id] = [self.dataset[i][self.length_key] for i in indices]
 

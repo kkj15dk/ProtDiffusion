@@ -20,3 +20,6 @@ ProtDiffusion/dataset/grouped_data
 output
 *.csv
 IDA_IDs.txt
+VAE_temp
+tempmodels
+*.txt

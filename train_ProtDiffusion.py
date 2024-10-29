@@ -25,6 +25,8 @@ config = ProtDiffusionTrainingConfig(
     gradient_clip_val=1.0,
     max_len=4096, # 512 * 2**6
     max_len_start=4096,
+    max_len=4096, # 512 * 2**6
+    max_len_start=4096,
     max_len_doubling_steps=100,
     ema_decay=0.9999,
     ema_update_after=100,
@@ -35,7 +37,7 @@ set_seed(config.seed) # Set the random seed for reproducibility
 generator = torch.Generator().manual_seed(config.seed)
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
-dataset = load_from_disk('/home/kaspe/ProtDiffusion/datasets/PKSs_grouped')
+dataset = load_from_disk('/work3/s204514/PKSs_grouped')
 train_dataset = dataset.shuffle(config.seed)
 
 # %%
@@ -56,7 +58,10 @@ test_dataset = val_test_split['test']
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
 
-# %%
+# Get pretrained models
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+vae = AutoencoderKL1D.from_pretrained('/zhome/fb/0/155603/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
+
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 12")
 num_workers = 12
@@ -94,7 +99,7 @@ transformer = DiTTransformer1DModel(
     norm_elementwise_affine = False,
     norm_eps = 1e-5,
     pos_embed_type = "sinusoidal", # sinusoidal
-    num_positional_embeddings = 512,
+    num_positional_embeddings = 256, # TODO: Should change based on max_len
     use_rope_embed = True, # RoPE https://github.com/lucidrains/rotary-embedding-torch
 )
 count_parameters(transformer) # Count the parameters of the model and print

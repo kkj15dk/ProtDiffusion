@@ -17,14 +17,14 @@ config = VAETrainingConfig(
     lr_warmup_steps=1000,
     kl_warmup_steps=2000,
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v9.0"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v9.3"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=8192, # 512 * 16 ((2**4))
     max_len_start=8192,
     max_len_doubling_steps=10000,
     ema_decay=0.9999,
-    ema_update_after=1000,
+    ema_update_after=100,
     ema_update_every=10,
 )
 print("Output dir: ", config.output_dir)
@@ -48,6 +48,9 @@ val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, s
 val_dataset = val_test_split['train']
 test_dataset = val_test_split['test']
 
+train_dataset = train_dataset.shuffle() # shuffle again for the second epoch, I am restarting training
+train_dataset = train_dataset.shuffle(config.seed + 1) # shuffle again for the third epoch, I am restarting training
+
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
 print(f"Validation dataset length: {len(val_dataset)}")
@@ -55,6 +58,9 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
+print("setting num_workers to 16")
+num_workers = 16
+train_dataloader = make_dataloader(config, 
 print("setting num_workers to 12")
 num_workers = 12
 train_dataloader = make_clustered_dataloader(config, 
@@ -121,4 +127,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train()
+    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/protein-VAE-UniRef50_v9.2.3/checkpoints/checkpoint_47')

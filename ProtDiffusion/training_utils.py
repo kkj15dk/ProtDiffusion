@@ -13,6 +13,7 @@ from datasets import Dataset
 import os
 import numpy as np
 import gc
+from copy import deepcopy
 
 from dataclasses import dataclass
 from typing import Optional, Union, List
@@ -28,7 +29,8 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from tqdm import tqdm
-import json
+
+import ot
 
 from .models.autoencoder_kl_1d import AutoencoderKL1D
 from .models.dit_transformer_1d import DiTTransformer1DModel
@@ -159,6 +161,45 @@ def calculate_stats(averages: List[int], standard_deviations: List[int], num_ele
 
     return mu, standard_dev
 
+def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor
+    ) -> torch.Tensor: # TODO: make the for loop faster (AKA, don't use a for loop, you dingus)
+    '''
+    Reorder the noise tensor to have pairings for optimal transport with respect to the latent tensor.
+    returns the noise tensor reordered.
+    '''
+    B, C, L = latent.shape
+
+    xs = latent.view(B, -1)
+    xt = noise.view(B, -1)
+
+    a, b = torch.ones((B,)) / B, torch.ones((B,)) / B  # uniform distribution on samples
+
+    # loss matrix
+    M = ot.dist(xs, xt)
+    G0 = ot.emd(a, b, M)
+    bool_g = (G0*B).to(dtype=torch.bool)
+
+    sorted_xt = torch.zeros_like(xt)
+    for i in range(B):
+            for j in range(B):
+                if bool_g[i, j]:
+                    sorted_xt[i] = xt[j]
+
+    noise = sorted_xt.reshape(B, C, L)
+    return noise
+
+def make_dataloader(config: VAETrainingConfig,
+                    dataset: Dataset,
+                    tokenizer: PreTrainedTokenizerFast,
+                    max_len: int,
+                    id_key: str = 'id',
+                    length_key: str = 'length',
+                    label_key: str = 'label',
+                    sequence_key: str = 'sequence',
+                    pad_to_multiple_of: int = 16,
+                    drop_last: bool = False,
+                    num_workers: int = 1,
+                    generator: Optional[torch.Generator] = None,
 def make_clustered_dataloader(config: VAETrainingConfig,
                         dataset: Dataset,
                         tokenizer: PreTrainedTokenizerFast,
@@ -226,20 +267,22 @@ def make_normal_dataloader(config: VAETrainingConfig,
                            pad_to_multiple_of=pad_to_multiple_of,
                            drop_last=drop_last,
                            num_workers=num_workers,
+                           generator=generator,
     )
 
     clustered_dataset = ClusteredDataset(dataset, 
-                                        id_key=id_key,
-                                        length_key=length_key,
-                                        label_key=label_key,
-                                        sequence_key=sequence_key,
-                                        pad_to_multiple_of=pad_to_multiple_of,
+                                         id_key=id_key,
+                                         length_key=length_key,
+                                         label_key=label_key,
+                                         sequence_key=sequence_key,
+                                         pad_to_multiple_of=pad_to_multiple_of,
     )
 
     dataloader = DataLoader(clustered_dataset,
                             batch_sampler=sampler, 
                             collate_fn=sampler.collate_fn,
                             num_workers=num_workers,
+                            generator=generator,
     )
     return dataloader
 
@@ -316,7 +359,9 @@ class BatchSampler(Sampler):
                  sequence_key: str = 'input_ids',
                  pad_to_multiple_of: int = 16,
                  drop_last: bool = True,
-                 num_workers: int = 1):
+                 num_workers: int = 1,
+                 generator: Optional[torch.Generator] = None,
+    ):
         self.tokenizer = tokenizer
         self.batch_size = batch_size
         self.mega_batch_size = mega_batch_size
@@ -329,6 +374,7 @@ class BatchSampler(Sampler):
         self.pad_to_multiple_of = pad_to_multiple_of
         self.dataset = dataset
         self.num_workers = num_workers
+        self.generator = generator
 
     def collate_fn(self, batch):
         '''
@@ -367,7 +413,7 @@ class BatchSampler(Sampler):
             seq_len = item[self.length_key]
 
             if seq_len > max_len:
-                index = random.randint(0, seq_len - max_len)
+                index = torch.randint(0, seq_len - max_len, (1,), generator=self.generator).item()
                 sequence.append(seq[index:index+max_len])
             else:
                 sequence.append(seq)
@@ -397,8 +443,10 @@ class BatchSampler(Sampler):
 
     def __iter__(self):
         size = len(self.dataset)
-        indices = list(range(size))
-        random.shuffle(indices)
+        # # old implementation
+        # indices = list(range(size))
+        # random.shuffle(indices)
+        indices = torch.randperm(size, generator=self.generator).tolist()
 
         step = self.mega_batch_size * self.batch_size
         for i in range(0, size, step):
@@ -425,8 +473,8 @@ class BatchSampler(Sampler):
 
             # # old implementation
             # pool_lengths = [self.dataset[i]['length'] for i in pool_indices]
-
-            sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths]
+            sample_indices = [torch.randint(0, len(lenlist), (1,), generator=self.generator).item() for lenlist in pool_lengths]
+            # sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths] # New old implementation
             pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
 
             # Zip indices with sample indices and sort by length more efficiently
@@ -435,9 +483,10 @@ class BatchSampler(Sampler):
 
             pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
 
-            mega_batch_indices = list(range(0, len(pool), self.batch_size))
-            random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
-
+            # # old implementation
+            # mega_batch_indices = list(range(0, len(pool), self.batch_size))
+            # random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
+            mega_batch_indices = torch.randperm((len(pool) // self.batch_size) + 1, generator=self.generator).tolist()
             for j in mega_batch_indices:
                 if self.drop_last and j + self.batch_size > len(pool): # drop the last batch if it's too small
                     continue
@@ -623,7 +672,7 @@ class VAETrainer:
             # Save all samples as a FASTA file
             seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
                             description=
-                            f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.2f}")
+                            f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.3f}")
                             for i, seq in enumerate(seqs_pred)]
 
             with open(f"{test_dir}/{name}.fa", "a") as f:
@@ -785,12 +834,13 @@ class VAETrainer:
                         self.accelerator.save_state()
                     self.model.train() # Make sure the model is in train mode
                 
-                # if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
-                #     self.accelerator_config.automatic_checkpoint_naming = False
-                #     self.accelerator.save_state(
-                #             output_dir=os.path.join(self.config.output_dir, f"Epoch_{epoch}")
-                #         )
-                #     self.accelerator_config.automatic_checkpoint_naming = True
+                self.accelerator.wait_for_everyone()
+                if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
+                    self.accelerator_config.automatic_checkpoint_naming = False
+                    self.accelerator.save_state(
+                            output_dir=os.path.join(self.config.output_dir, f"Epoch_{epoch}")
+                        )
+                    self.accelerator_config.automatic_checkpoint_naming = True
 
         self.accelerator.end_training()
         self.save_pretrained()
@@ -816,8 +866,9 @@ class ProtDiffusionTrainingConfig:
     num_epochs: int = 1  # the number of epochs to train the model
     gradient_accumulation_steps: int = 2  # the number of steps to accumulate gradients before taking an optimizer step
     learning_rate: float = 1e-4  # the learning rate
-    lr_warmup_steps:int  = 1000
-    save_image_model_steps:int  = 1000
+    lr_warmup_steps: int  = 1000
+    save_image_model_steps: int  = 1000
+    save_every_epoch: bool = False  # whether to save the model every epoch
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision #TODO: implement fully
     optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`
     SGDmomentum: Optional[float] = 0.9
@@ -840,14 +891,14 @@ class ProtDiffusionTrainingConfig:
 
     cutoff: Optional[float] = None # cutoff for when to predict the token given the logits, and when to assign the unknown token 'X' to this position
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
-    kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
-    kl_warmup_steps: Optional[int] = None # the number of steps to warm up the KL divergence weight
 
     gradient_clip_val: Optional[float] = 5.0  # the value to clip the gradients to
     weight_decay: float = 0.01 # weight decay for the optimizer
     ema_decay: float = 0.9999 # the decay rate for the EMA
     ema_update_after: int = 1000 # the number of steps to wait before updating the EMA
     ema_update_every: int = 1 # the number of steps to wait before updating the EMA
+
+    use_batch_optimal_transport: bool = True # whether to use optimal transport for the batch to reorder the noise
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -872,10 +923,10 @@ class ProtDiffusionTrainer:
                  transformer: DiTTransformer1DModel,
                  vae: AutoencoderKL1D, 
                  tokenizer: PreTrainedTokenizerFast, 
-                 train_dataloader: DataLoader, 
-                 val_dataloader: DataLoader, 
                  config: ProtDiffusionTrainingConfig, 
-                 test_dataloader: DataLoader = None,
+                 train_dataloader: DataLoader, 
+                 val_dataloader: Optional[DataLoader] = None, 
+                 test_dataloader: Optional[DataLoader] = None,
                  training_variables: Optional[TrainingVariables] = None,
 
                  noise_scheduler: KarrasDiffusionSchedulers = None, # the scheduler to use for the diffusion
@@ -925,9 +976,13 @@ class ProtDiffusionTrainer:
         # Prepare everything
         # There is no specific order to remember, you just need to unpack the
         # objects in the same order you gave them to the prepare method.
-        self.transformer, self.vae, self.optimizer, self.train_dataloader, self.test_dataloader, self.val_dataloader, self.lr_scheduler = self.accelerator.prepare(
-            transformer, vae, optimizer, train_dataloader, test_dataloader, val_dataloader, lr_scheduler
+        self.transformer, self.vae, self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
+            transformer, vae, optimizer, train_dataloader, lr_scheduler
         )
+        if test_dataloader is not None:
+            self.test_dataloader = self.accelerator.prepare(test_dataloader)
+        if val_dataloader is not None:
+            self.val_dataloader = self.accelerator.prepare(val_dataloader)
         self.vae.eval() # Set the VAE to eval mode
         self.accelerator.register_for_checkpointing(self.training_variables)
 
@@ -956,8 +1011,76 @@ class ProtDiffusionTrainer:
             if p.requires_grad and p.grad is not None:
                 p.grad.data = p.grad.data / n_tokens
 
-    @torch.no_grad()
     def evaluate(self,
+                 model,
+                 dataloader,
+                 generator: Optional[torch.Generator] = None,
+    ):
+        progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
+
+        running_loss = 0.0
+
+        for step, batch in enumerate(dataloader):
+            if step == 0:
+                print(f"evaluate step 1 id: {batch['id']}")
+
+            input_ids = batch['input_ids']
+            attention_mask = batch['attention_mask']
+
+            vae_encoded = self.vae.encode(x = input_ids,
+                                          attention_mask = attention_mask,
+            )
+
+            attention_mask = vae_encoded.attention_masks[-1]
+            latent = vae_encoded.latent_dist.sample() # Mode is deterministic TODO: .sample() or .mode()?
+            label = batch['label']
+
+            # Sample noise to add to the images
+            noise = torch.randn(
+                latent.shape, 
+                device=latent.device,
+                generator=generator,
+            )
+            if self.config.use_batch_optimal_transport:
+                noise = reorder_noise_for_OT(latent, noise)
+            noise = noise * attention_mask.unsqueeze(1) # Mask the noise
+            bs = latent.shape[0]
+
+            # Sample a random timestep for each image
+            timesteps = torch.randint(
+                0, self.noise_scheduler.config.num_train_timesteps, (bs,), device=latent.device,
+                dtype=torch.int64,
+                generator=generator,
+            )
+
+            # Add noise to the clean images according to the noise magnitude at each timestep
+            noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
+            input = noisy_latent.to(self.accelerator.device)
+            attention_mask = attention_mask.to(self.accelerator.device)
+
+            # Forward pass
+            output = model(hidden_states = input,
+                           attention_mask = attention_mask,
+                           timestep = timesteps,
+                           class_labels = label,
+            ).sample
+            
+            # Loss calculation
+            loss = F.mse_loss(output, noise, reduction='none').mean(dim=1) * attention_mask # Mean over the channel dimension, Mask the loss
+            loss = loss.sum() / attention_mask.sum() # Average the loss over the non-masked tokens
+
+            # Log the progress
+            running_loss += loss.item()
+            progress_bar.update(1)
+
+        val_loss = running_loss / len(dataloader)
+        logs = {"val_loss": val_loss,
+                "step": self.training_variables.global_step,
+        }
+        return logs
+
+    @torch.no_grad()
+    def inference_test(self,
                  pipeline: ProtDiffusionPipeline,
     ) -> dict:
         test_dir = os.path.join(self.config.output_dir, "samples")
@@ -1082,10 +1205,12 @@ class ProtDiffusionTrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable=True) # not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
+                if step == 0:
+                    print(f"training step 1 id: {batch['id']}")
 
                 input_ids = batch['input_ids']
                 attention_mask = batch['attention_mask']
@@ -1100,6 +1225,8 @@ class ProtDiffusionTrainer:
 
                 # Sample noise to add to the images
                 noise = torch.randn(latent.shape, device=latent.device)
+                if self.config.use_batch_optimal_transport:
+                    noise = reorder_noise_for_OT(latent, noise)
                 noise = noise * attention_mask.unsqueeze(1) # Mask the noise
                 bs = latent.shape[0]
 
@@ -1112,7 +1239,7 @@ class ProtDiffusionTrainer:
                 # Add noise to the clean images according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
-                noisy_latent = self.noise_scheduler.scale_model_input(noisy_latent, timesteps) # TODO: Find out if this is necessary
+                # noisy_latent = self.noise_scheduler.scale_model_input(noisy_latent, timesteps) # TODO: Find out if this is necessary
 
                 # Gradient accumulation
                 with self.accelerator.accumulate(self.transformer):
@@ -1164,25 +1291,51 @@ class ProtDiffusionTrainer:
                 if self.training_variables.global_step % self.config.max_len_doubling_steps == 0:
                     self.update_max_len()
 
+                # Evaluation and saving the model
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
-                    self.accelerator.wait_for_everyone()
                     
-                    pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
-
-                    self.evaluate(pipeline)
-
+                    # Test of inference
                     self.accelerator.wait_for_everyone()
+                    pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                    self.inference_test(pipeline)
+
+                    # Evaluation
+                    self.accelerator.wait_for_everyone()
+                    dataloader = deepcopy(self.val_dataloader)
+                    generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
+                    logs = self.evaluate(model = self.ema.ema_model,
+                                        dataloader = self.val_dataloader,
+                                        generator = generator,
+                    )
+                    del dataloader
+                    self.accelerator.log(logs, step=self.training_variables.global_step)
                     if self.accelerator.is_main_process:
                         self.accelerator.save_state()
                     self.transformer.train() # Make sure the model is in train mode
-                
-                # if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
-                #     self.accelerator_config.automatic_checkpoint_naming = False
-                #     self.accelerator.save_state(
-                #             output_dir=os.path.join(self.config.output_dir, f"Epoch_{epoch}")
-                #         )
-                #     self.accelerator_config.automatic_checkpoint_naming = True
 
+            # After every epoch
+            if self.config.save_every_epoch:
+            
+                # Test of inference
+                self.accelerator.wait_for_everyone()
+                pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                self.inference_test(pipeline)
+
+                # Evaluation
+                self.accelerator.wait_for_everyone()
+                dataloader = deepcopy(self.val_dataloader)
+                generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
+                logs = self.evaluate(model = self.ema.ema_model,
+                                     dataloader = self.val_dataloader,
+                                     generator = generator,
+                )
+                del dataloader
+                self.accelerator.log(logs, step=self.training_variables.global_step)
+                if self.accelerator.is_main_process:
+                    self.accelerator.save_state()
+                self.transformer.train() # Make sure the model is in train mode
+
+        # After training
         self.accelerator.end_training()
         self.save_pretrained()
 

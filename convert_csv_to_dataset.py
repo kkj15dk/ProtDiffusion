@@ -3,6 +3,7 @@ from datasets import load_dataset, load_from_disk, Dataset
 from tqdm import tqdm
 import os
 import pandas as pd
+import numpy as np
 from transformers import PreTrainedTokenizerFast
 from ProtDiffusion.training_utils import round_length
 
@@ -12,10 +13,10 @@ sequence_key = 'sequence'
 id_key = 'clusterid' # This is the column to group by
 label_key = 'familytaxonid'
 pad_to_multiple_of = 16
-output_path = '/home/kaspe/ProtDiffusion/datasets/'
-input_path = '/home/kaspe/ProtDiffusion/datasets/UniRefALL_sorted.csv' # Has to be sorted by id
-filename_encoded = 'UniRefALL'
-filename_grouped = 'UniRef50'
+output_path = '/home/kkj/ProtDiffusion/datasets/'
+input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv' # Has to be sorted by id
+filename_encoded = 'UniRef50-test'
+filename_grouped = 'UniRef50-test'
 
 # %%
 # Define the transformation function for batches
@@ -34,6 +35,12 @@ def preprocess(example: dict,
         raise ValueError(f"Invalid label: {label}")
     length = round_length(len(sequence), rounding=pad_to_multiple_of)
     return {'sequence': sequence, 'label': label, 'length': length}
+
+def list_to_np(chunk):
+    chunk['label'] = chunk['label'].apply(lambda x: np.array(x).astype(np.int16))
+    chunk['length'] = chunk['length'].apply(lambda x: np.array(x).astype(np.int16))
+    chunk['sequence'] = chunk['sequence'].apply(lambda x: np.array(x).astype(np.string_))
+    return chunk
 
 def stream_groupby_gen(dataset: Dataset, 
                        id_key: str, 
@@ -67,26 +74,28 @@ def stream_groupby_gen(dataset: Dataset,
         chunk, orphans = chunk[~is_orphan], chunk[is_orphan]
         # Perform the aggregation and store the results
         chunk = agg(chunk)
-        dataset = Dataset.from_pandas(chunk.reset_index())
-        for i in range(len(dataset)):
-            yield dataset[i]
+        chunk = list_to_np(chunk).reset_index()
+
+        for i in range(len(chunk)):
+            yield chunk.iloc[i].to_dict()
 
     # Don't forget the remaining orphans
     if len(orphans):
         chunk = agg(orphans)
-        dataset = Dataset.from_pandas(chunk.reset_index())
-        for i in range(len(dataset)):
-            yield dataset[i]
+        chunk = list_to_np(chunk).reset_index()
+
+        for i in range(len(chunk)):
+            yield chunk.iloc[i].to_dict()
 
 # %%
 # Load the dataset
 dataset = load_dataset('csv', data_files=input_path)['train']
 
 # %%
-dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
-dataset = dataset.rename_column(' sequence', 'sequence')
-dataset = dataset.rename_column(' cluster90id', 'cluster90id')
-dataset = dataset.rename_column(' cluster100id', 'cluster100id')
+# dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
+# dataset = dataset.rename_column(' sequence', 'sequence')
+# dataset = dataset.rename_column(' cluster90id', 'cluster90id')
+# dataset = dataset.rename_column(' cluster100id', 'cluster100id')
 
 # %%
 # filter so that only sequences with ACDEFGHIKLMNOPQRSTUVWY are included
@@ -117,11 +126,15 @@ if not os.path.exists(f'{output_path}{filename_grouped}_grouped'):
     print("Loaded dataset, starting grouping")
     dataset = Dataset.from_generator(stream_groupby_gen, 
                                      gen_kwargs={'dataset': dataset, 'id_key': id_key},
-    )
+    ).with_format('numpy')
     print("Grouping done, saving to disk")
     dataset.save_to_disk(f'{output_path}{filename_grouped}_grouped')
 else:
     print(f"{filename_grouped} already grouped")
 
 print('Doen')
+
 # %%
+
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
+print(dataset)

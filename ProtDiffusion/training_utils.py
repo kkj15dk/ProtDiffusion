@@ -188,18 +188,6 @@ def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor
     noise = sorted_xt.reshape(B, C, L)
     return noise
 
-def make_dataloader(config: VAETrainingConfig,
-                    dataset: Dataset,
-                    tokenizer: PreTrainedTokenizerFast,
-                    max_len: int,
-                    id_key: str = 'id',
-                    length_key: str = 'length',
-                    label_key: str = 'label',
-                    sequence_key: str = 'sequence',
-                    pad_to_multiple_of: int = 16,
-                    drop_last: bool = False,
-                    num_workers: int = 1,
-                    generator: Optional[torch.Generator] = None,
 def make_clustered_dataloader(config: VAETrainingConfig,
                         dataset: Dataset,
                         tokenizer: PreTrainedTokenizerFast,
@@ -211,48 +199,8 @@ def make_clustered_dataloader(config: VAETrainingConfig,
                         pad_to_multiple_of: int = 16,
                         drop_last: bool = False,
                         num_workers: int = 1,
-) -> DataLoader:
-
-    sampler = BatchSampler(dataset,
-                           tokenizer,
-                           config.batch_size,
-                           config.mega_batch,
-                           max_length=max_len,
-                           id_key=id_key,
-                           length_key=length_key,
-                           label_key=label_key,
-                           sequence_key=sequence_key,
-                           pad_to_multiple_of=pad_to_multiple_of,
-                           drop_last=drop_last,
-                           num_workers=num_workers,
-    )
-
-    clustered_dataset = ClusteredDataset(dataset, 
-                                        id_key=id_key,
-                                        length_key=length_key,
-                                        label_key=label_key,
-                                        sequence_key=sequence_key,
-                                        pad_to_multiple_of=pad_to_multiple_of,
-    )
-
-    dataloader = DataLoader(clustered_dataset,
-                            batch_sampler=sampler, 
-                            collate_fn=sampler.collate_fn,
-                            num_workers=num_workers,
-    )
-    return dataloader
-
-def make_normal_dataloader(config: VAETrainingConfig,
-                        dataset: Dataset,
-                        tokenizer: PreTrainedTokenizerFast,
-                        max_len: int,
-                        id_key: str = 'id',
-                        length_key: str = 'length',
-                        label_key: str = 'label',
-                        sequence_key: str = 'sequence',
-                        pad_to_multiple_of: int = 16,
-                        drop_last: bool = False,
-                        num_workers: int = 1,
+                        generator: Optional[torch.Generator] = None,
+                        shuffle: bool = True,
 ) -> DataLoader:
 
     sampler = BatchSampler(dataset,
@@ -268,14 +216,15 @@ def make_normal_dataloader(config: VAETrainingConfig,
                            drop_last=drop_last,
                            num_workers=num_workers,
                            generator=generator,
+                           shuffle=shuffle,
     )
 
     clustered_dataset = ClusteredDataset(dataset, 
-                                         id_key=id_key,
-                                         length_key=length_key,
-                                         label_key=label_key,
-                                         sequence_key=sequence_key,
-                                         pad_to_multiple_of=pad_to_multiple_of,
+                                        id_key=id_key,
+                                        length_key=length_key,
+                                        label_key=label_key,
+                                        sequence_key=sequence_key,
+                                        pad_to_multiple_of=pad_to_multiple_of,
     )
 
     dataloader = DataLoader(clustered_dataset,
@@ -285,6 +234,51 @@ def make_normal_dataloader(config: VAETrainingConfig,
                             generator=generator,
     )
     return dataloader
+
+# def make_normal_dataloader(config: VAETrainingConfig,
+#                         dataset: Dataset,
+#                         tokenizer: PreTrainedTokenizerFast,
+#                         max_len: int,
+#                         id_key: str = 'id',
+#                         length_key: str = 'length',
+#                         label_key: str = 'label',
+#                         sequence_key: str = 'sequence',
+#                         pad_to_multiple_of: int = 16,
+#                         drop_last: bool = False,
+#                         num_workers: int = 1,
+#                         generator: Optional[torch.Generator] = None,
+# ) -> DataLoader:
+
+#     sampler = BatchSampler(dataset,
+#                            tokenizer,
+#                            config.batch_size,
+#                            config.mega_batch,
+#                            max_length=max_len,
+#                            id_key=id_key,
+#                            length_key=length_key,
+#                            label_key=label_key,
+#                            sequence_key=sequence_key,
+#                            pad_to_multiple_of=pad_to_multiple_of,
+#                            drop_last=drop_last,
+#                            num_workers=num_workers,
+#                            generator=generator,
+#     )
+
+#     clustered_dataset = ClusteredDataset(dataset, 
+#                                          id_key=id_key,
+#                                          length_key=length_key,
+#                                          label_key=label_key,
+#                                          sequence_key=sequence_key,
+#                                          pad_to_multiple_of=pad_to_multiple_of,
+#     )
+
+#     dataloader = DataLoader(clustered_dataset,
+#                             batch_sampler=sampler, 
+#                             collate_fn=sampler.collate_fn,
+#                             num_workers=num_workers,
+#                             generator=generator,
+#     )
+#     return dataloader
 
 class ClusteredDataset(Dataset):
     '''
@@ -361,6 +355,7 @@ class BatchSampler(Sampler):
                  drop_last: bool = True,
                  num_workers: int = 1,
                  generator: Optional[torch.Generator] = None,
+                 shuffle: bool = True,
     ):
         self.tokenizer = tokenizer
         self.batch_size = batch_size
@@ -375,6 +370,8 @@ class BatchSampler(Sampler):
         self.dataset = dataset
         self.num_workers = num_workers
         self.generator = generator
+        self.seed = generator.seed()
+        self.shuffle = shuffle
 
     def collate_fn(self, batch):
         '''
@@ -442,6 +439,11 @@ class BatchSampler(Sampler):
         return_dict[process_id] = [self.dataset[i][self.length_key] for i in indices]
 
     def __iter__(self):
+
+        if self.shuffle == False:
+            print("generator seed: ", self.seed)
+            self.generator = torch.Generator().manual_seed(self.seed)
+
         size = len(self.dataset)
         # # old implementation
         # indices = list(range(size))
@@ -980,9 +982,9 @@ class ProtDiffusionTrainer:
             transformer, vae, optimizer, train_dataloader, lr_scheduler
         )
         if test_dataloader is not None:
-            self.test_dataloader = self.accelerator.prepare(test_dataloader)
+            self.test_dataloader: DataLoader = self.accelerator.prepare(test_dataloader)
         if val_dataloader is not None:
-            self.val_dataloader = self.accelerator.prepare(val_dataloader)
+            self.val_dataloader: DataLoader = self.accelerator.prepare(val_dataloader)
         self.vae.eval() # Set the VAE to eval mode
         self.accelerator.register_for_checkpointing(self.training_variables)
 
@@ -1011,11 +1013,15 @@ class ProtDiffusionTrainer:
             if p.requires_grad and p.grad is not None:
                 p.grad.data = p.grad.data / n_tokens
 
-    def evaluate(self,
-                 model,
-                 dataloader,
-                 generator: Optional[torch.Generator] = None,
-    ):
+    def evaluate(self):
+        model = self.ema.ema_model
+        model.eval()
+        dataloader = self.val_dataloader
+        if dataloader.batch_sampler.shuffle == False:
+            generator = torch.Generator().manual_seed(self.config.seed)
+        else:
+            generator = None
+
         progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
 
         running_loss = 0.0

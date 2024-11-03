@@ -60,22 +60,23 @@ print(f"Test dataset length: {len(test_dataset)}")
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
 num_workers = 16
-train_dataloader = make_dataloader(config, 
-print("setting num_workers to 12")
-num_workers = 12
-train_dataloader = make_clustered_dataloader(config, 
+
+train_dataloader = make_clustered_dataloader(config.batch_size,
+                                   config.mega_batch,
                                    train_dataset,
                                    tokenizer=tokenizer,
                                    max_len=config.max_len_start,
                                    num_workers=num_workers,
 )
-val_dataloader = make_clustered_dataloader(config, 
+val_dataloader = make_clustered_dataloader(config.batch_size,
+                                 config.mega_batch,
                                  val_dataset, 
                                  tokenizer=tokenizer,
                                  max_len=config.max_len, 
                                  num_workers=1,
 )
-test_dataloader = make_clustered_dataloader(config,
+test_dataloader = make_clustered_dataloader(config.batch_size,
+                                  config.mega_batch,
                                   test_dataset,
                                   tokenizer=tokenizer,
                                   max_len=config.max_len, 

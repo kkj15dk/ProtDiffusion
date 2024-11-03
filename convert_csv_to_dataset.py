@@ -3,8 +3,11 @@ from datasets import load_dataset, load_from_disk, Dataset
 from tqdm import tqdm
 import os
 import pandas as pd
+from ProtDiffusion.training_utils import round_length, make_clustered_dataloader, ClusteredDataset
+
+import numpy as np
 from transformers import PreTrainedTokenizerFast
-from ProtDiffusion.training_utils import round_length
+import torch
 
 # %%
 # Define the parameters
@@ -12,10 +15,10 @@ sequence_key = 'sequence'
 id_key = 'clusterid' # This is the column to group by
 label_key = 'familytaxonid'
 pad_to_multiple_of = 16
-output_path = '/home/kaspe/ProtDiffusion/datasets/'
-input_path = '/home/kaspe/ProtDiffusion/datasets/UniRefALL_sorted.csv' # Has to be sorted by id
-filename_encoded = 'UniRefALL'
-filename_grouped = 'UniRef50'
+output_path = '/home/kkj/ProtDiffusion/datasets/'
+input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv' # Has to be sorted by id
+filename_encoded = 'UniRef50-test'
+filename_grouped = 'UniRef50-test'
 
 # %%
 # Define the transformation function for batches
@@ -35,6 +38,12 @@ def preprocess(example: dict,
     length = round_length(len(sequence), rounding=pad_to_multiple_of)
     return {'sequence': sequence, 'label': label, 'length': length}
 
+def str_listing_func(grouped_chunk):
+    return list(grouped_chunk)
+
+def int_listing_func(grouped_chunk):
+    return list(grouped_chunk)
+
 def stream_groupby_gen(dataset: Dataset, 
                        id_key: str, 
                        chunk_size=100000, 
@@ -43,16 +52,18 @@ def stream_groupby_gen(dataset: Dataset,
     Input:
     A dataset with columns 'sequence', 'label', 'length', and id_key. id_key is the column to group by, and will be renamed to 'id'.
     '''
+    # aggregate function, using list might be taking up memory, I'm not sure, see: https://github.com/pytorch/pytorch/issues/13246
     agg = lambda chunk: chunk.groupby('id').agg({
-        'label': list, 
-        'length': list,
-        'sequence': list
+        'label': int_listing_func,
+        'length': int_listing_func,
+        'sequence': str_listing_func,
         })
 
     # Tell pandas to read the data in chunks
-    chunks = dataset.rename_column(id_key, 'id').select_columns(['id','label','length','sequence']).to_pandas(batched=True, batch_size=chunk_size)
+    chunks = dataset.select_columns([id_key,'label','length','sequence']).to_pandas(batched=True, batch_size=chunk_size)
     
     orphans = pd.DataFrame()
+    max_group = 0
 
     for chunk in tqdm(chunks, desc='Processing chunks', unit='chunk', total=len(dataset)//chunk_size):
 
@@ -60,21 +71,29 @@ def stream_groupby_gen(dataset: Dataset,
         chunk = pd.concat((orphans, chunk))
 
         # Determine which rows are orphans
-        last_val = chunk['id'].iloc[-1]
-        is_orphan = chunk['id'] == last_val
+        last_val = chunk[id_key].iloc[-1]
+        is_orphan = chunk[id_key] == last_val
 
         # Put the new orphans aside
         chunk, orphans = chunk[~is_orphan], chunk[is_orphan]
-        # Perform the aggregation and store the results
-        chunk = agg(chunk)
-        dataset = Dataset.from_pandas(chunk.reset_index())
+        # # Perform the aggregation and store the results
+        # chunk : pd.DataFrame = agg(chunk)
+        # print(chunk)
+        # chunk['sequence'] = chunk['sequence'].apply(lambda x: pd.DataFrame(x))
+        chunk['id'] = chunk.groupby(id_key).ngroup() + max_group
+        max_group = chunk['id'].max() + 1
+        print(chunk)
+
+        dataset = Dataset.from_pandas(chunk.reset_index(drop=True))
         for i in range(len(dataset)):
             yield dataset[i]
 
     # Don't forget the remaining orphans
     if len(orphans):
-        chunk = agg(orphans)
-        dataset = Dataset.from_pandas(chunk.reset_index())
+        # chunk = agg(orphans)
+        chunk['id'] = chunk.groupby(id_key).ngroup() + max_group
+        max_group = chunk['id'].max() + 1
+        dataset = Dataset.from_pandas(chunk.reset_index(drop=True))
         for i in range(len(dataset)):
             yield dataset[i]
 
@@ -83,10 +102,9 @@ def stream_groupby_gen(dataset: Dataset,
 dataset = load_dataset('csv', data_files=input_path)['train']
 
 # %%
-dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
-dataset = dataset.rename_column(' sequence', 'sequence')
-dataset = dataset.rename_column(' cluster90id', 'cluster90id')
-dataset = dataset.rename_column(' cluster100id', 'cluster100id')
+# dataset = dataset.rename_column(' sequence', 'sequence')
+# dataset = dataset.rename_column(' cluster90id', 'cluster90id')
+# dataset = dataset.rename_column(' cluster100id', 'cluster100id')
 
 # %%
 # filter so that only sequences with ACDEFGHIKLMNOPQRSTUVWY are included
@@ -124,4 +142,34 @@ else:
     print(f"{filename_grouped} already grouped")
 
 print('Doen')
+# %%
+
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
+tokenizer = PreTrainedTokenizerFast.from_pretrained('/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1')
+
+generator = torch.Generator().manual_seed(42)
+clustered_dataset = ClusteredDataset(dataset)
+print(dataset)
+len(clustered_dataset)
+
+# %%
+
+train_val_test_split = clustered_dataset.train_test_split(test_size=0.1, seed=42)
+train_dataset = train_val_test_split['train']
+val_dataset = train_val_test_split['test']
+
+# %%
+train_dataloader = make_clustered_dataloader(2,
+                                             250,
+                                             clustered_dataset,
+                                             tokenizer=tokenizer,
+                                             max_len=4096,
+                                             num_workers=16,
+                                             generator=generator,
+)
+
+# %%
+for data in train_dataloader:
+    print(data)
+    break
 # %%

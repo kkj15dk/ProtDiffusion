@@ -8,7 +8,7 @@ from ema_pytorch import EMA
 
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from diffusers.schedulers import KarrasDiffusionSchedulers
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 
 import os
 import numpy as np
@@ -20,6 +20,7 @@ from typing import Optional, Union, List
 
 from transformers import PreTrainedTokenizerFast
 import random
+import time
 
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
@@ -104,10 +105,10 @@ class VAETrainingConfig:
 
         if not self.overwrite_output_dir and os.path.exists(self.output_dir):
             raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
-        
+
         if self.push_to_hub:
             raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
-        
+
         assert self.optimizer in ["AdamW", "Adam", "SGD", "Adamax"], "Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`"
         assert self.mixed_precision in ["no", "fp16"], "Invalid mixed precision setting, choose between `no` and `fp16`" # TODO: implement fully
         assert self.max_len % self.pad_to_multiple_of == 0, "The maximum length of the input sequence must be a multiple of the pad_to_multiple_of parameter."
@@ -188,175 +189,229 @@ def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor
     noise = sorted_xt.reshape(B, C, L)
     return noise
 
-def make_dataloader(config: VAETrainingConfig,
-                    dataset: Dataset,
-                    tokenizer: PreTrainedTokenizerFast,
-                    max_len: int,
-                    id_key: str = 'id',
-                    length_key: str = 'length',
-                    label_key: str = 'label',
-                    sequence_key: str = 'sequence',
-                    pad_to_multiple_of: int = 16,
-                    drop_last: bool = False,
-                    num_workers: int = 1,
-                    generator: Optional[torch.Generator] = None,
-def make_clustered_dataloader(config: VAETrainingConfig,
-                        dataset: Dataset,
-                        tokenizer: PreTrainedTokenizerFast,
-                        max_len: int,
-                        id_key: str = 'id',
-                        length_key: str = 'length',
-                        label_key: str = 'label',
-                        sequence_key: str = 'sequence',
-                        pad_to_multiple_of: int = 16,
-                        drop_last: bool = False,
-                        num_workers: int = 1,
+class ClusteredDataset(Dataset):
+    '''
+    Create a custom dataset for the clustered dataset.
+    The dataset is a dictionary with the identifier as the key, and the value is a dictionary with the label, list of sequences, and list of lengths.
+    '''
+    def __init__(self, dataset: Dataset,
+                 clusterid_key: str = 'clusterid',
+                 length_key: str = 'length',
+                 label_key: str = 'label',
+                 sequence_key: str = 'sequence',
+                 pad_to_multiple_of: int = 16,
+    ):
+        self.dataset = dataset
+        self.clusterid_key = clusterid_key
+        self.length_key = length_key
+        self.label_key = label_key
+        self.sequence_key = sequence_key
+        self.id = torch.tensor(self.dataset['id']) # There has to be a unique integer id for each cluster.
+        self.unique_ids = self.id.unique()
+        self.pad_to_multiple_of = pad_to_multiple_of # For use in the Trainer classes
+
+    def __len__(self):
+        return len(self.id.unique())
+
+    def __getitem__(self, idx: Union[List[tuple[int, int]], tuple[int,int], List[int], int]): # Way too convoluted, I'm sorry.
+        '''
+        Get a sample from the dataset. Using two indices, the first index is the cluster index, and the second index is the sample index.
+
+        If you choose a single index, or a list of single integers it will return the entire cluster.
+        '''
+
+        if isinstance(idx, tuple): # TODO: clean up this mess of if statements. make sure the index is a list of tuples after this.
+            if isinstance(idx[0], int) and isinstance(idx[1], int):
+                idx = [idx]
+            else:
+                raise ValueError("An index tuple must be a tuple of two integers.")
+        if isinstance(idx, int):
+            idx = [idx]
+
+        assert all(isinstance(i, tuple) for i in idx) or all(isinstance(i, int) for i in idx), "The index must be a tuple of two integers, or an int."
+
+        if isinstance(idx[0], tuple): # If the index is a list of tuples, we retrieve the specific entry in the cluster
+            clusterindex, sampleindex = zip(*idx)
+        elif isinstance(idx[0], int): # If the index is a list of integers, we retrieve the entire cluster
+            clusterindex = idx
+            sampleindex = None
+
+        clusterid = []
+        length = []
+        label = []
+        sequence = []
+
+        for i in range(len(idx)):
+            indexes = torch.where(self.id == clusterindex[i])[0]
+            data = self.dataset[indexes]
+            if sampleindex is None: # If the sample index is None, we return the entire cluster
+                clusterid.append(data[self.clusterid_key])
+                length.append(data[self.length_key])
+                label.append(data[self.label_key])
+                sequence.append(data[self.sequence_key])
+            else:
+                sampleindex_i = sampleindex[i]
+                clusterid.append(data[self.clusterid_key][sampleindex_i])
+                length.append(data[self.length_key][sampleindex_i])
+                label.append(data[self.label_key][sampleindex_i])
+                sequence.append(data[self.sequence_key][sampleindex_i])
+
+        return {'clusterid': clusterid, 'length': length, 'label': label, 'sequence': sequence}
+
+    def __get_len__(self, idx: Union[int, List[int]], ids: torch.Tensor = None):
+        '''
+        Get the list of sequence lengths of the cluster.
+        '''
+        if isinstance(idx, int):
+            idx = [idx]
+
+        assert all(isinstance(i, int) for i in idx), "The index must be an int or a list of ints."
+
+        if ids is None:
+            ids = self.id  # If the ids are not provided, we use the ids of the dataset. This is useful for multiprocessing.
+
+        length = []
+        for i in idx:
+            indexes = torch.where(ids == i)[0]
+            len = self.dataset[indexes][self.length_key]
+            length.append(len)
+
+        return length
+
+    def train_test_split(self, test_size: Union[float,int], seed: int = 42):
+        total = len(self)
+        if isinstance(test_size, int):
+            assert test_size < total, "If the test size is an int, it must be lees than the total dataset size"
+        elif isinstance(test_size, float):
+            test_size = int(total * test_size)
+        else:
+            raise ValueError("The test size must be an int or a float.")
+
+        assert test_size > 0, "The test size must be greater than 0."
+        assert test_size < total, "The test size must be less than the total size of the dataset."
+
+        random_ids = torch.randperm(total, generator=torch.Generator().manual_seed(seed))
+        test_ids = random_ids[:test_size]
+
+        # Make new datasets based on the splits
+        test_mask = torch.isin(self.id, test_ids)
+        test_indices = np.arange(len(self.id))[test_mask]
+        train_indices = np.arange(len(self.id))[~test_mask]
+
+        test_dataset = self.dataset.select(test_indices)
+        train_dataset = self.dataset.select(train_indices)
+
+
+        train = ClusteredDataset(train_dataset,
+                                 clusterid_key=self.clusterid_key,
+                                 length_key=self.length_key,
+                                 label_key=self.label_key,
+                                 sequence_key=self.sequence_key,
+                                 pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        test = ClusteredDataset(test_dataset,
+                                clusterid_key=self.clusterid_key,
+                                length_key=self.length_key,
+                                label_key=self.label_key,
+                                sequence_key=self.sequence_key,
+                                pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        print(f"Train dataset length: {len(train)}")
+        print(f"Test dataset length: {len(test)}")
+
+        return DatasetDict({'train': train, 'test': test})
+
+def make_clustered_dataloader(batch_size: int,
+                              mega_batch: int,
+                              clustered_dataset: ClusteredDataset,
+                              tokenizer: PreTrainedTokenizerFast,
+                              max_len: int,
+                              pad_to_multiple_of: int = 16,
+                              drop_last: bool = False,
+                              num_workers: int = 1,
+                              generator: Optional[torch.Generator] = None,
 ) -> DataLoader:
 
-    sampler = BatchSampler(dataset,
+    sampler = BatchSampler(clustered_dataset,
                            tokenizer,
-                           config.batch_size,
-                           config.mega_batch,
+                           batch_size,
+                           mega_batch,
                            max_length=max_len,
-                           id_key=id_key,
-                           length_key=length_key,
-                           label_key=label_key,
-                           sequence_key=sequence_key,
-                           pad_to_multiple_of=pad_to_multiple_of,
-                           drop_last=drop_last,
-                           num_workers=num_workers,
-    )
-
-    clustered_dataset = ClusteredDataset(dataset, 
-                                        id_key=id_key,
-                                        length_key=length_key,
-                                        label_key=label_key,
-                                        sequence_key=sequence_key,
-                                        pad_to_multiple_of=pad_to_multiple_of,
-    )
-
-    dataloader = DataLoader(clustered_dataset,
-                            batch_sampler=sampler, 
-                            collate_fn=sampler.collate_fn,
-                            num_workers=num_workers,
-    )
-    return dataloader
-
-def make_normal_dataloader(config: VAETrainingConfig,
-                        dataset: Dataset,
-                        tokenizer: PreTrainedTokenizerFast,
-                        max_len: int,
-                        id_key: str = 'id',
-                        length_key: str = 'length',
-                        label_key: str = 'label',
-                        sequence_key: str = 'sequence',
-                        pad_to_multiple_of: int = 16,
-                        drop_last: bool = False,
-                        num_workers: int = 1,
-) -> DataLoader:
-
-    sampler = BatchSampler(dataset,
-                           tokenizer,
-                           config.batch_size,
-                           config.mega_batch,
-                           max_length=max_len,
-                           id_key=id_key,
-                           length_key=length_key,
-                           label_key=label_key,
-                           sequence_key=sequence_key,
                            pad_to_multiple_of=pad_to_multiple_of,
                            drop_last=drop_last,
                            num_workers=num_workers,
                            generator=generator,
     )
 
-    clustered_dataset = ClusteredDataset(dataset, 
-                                         id_key=id_key,
-                                         length_key=length_key,
-                                         label_key=label_key,
-                                         sequence_key=sequence_key,
-                                         pad_to_multiple_of=pad_to_multiple_of,
-    )
-
     dataloader = DataLoader(clustered_dataset,
-                            batch_sampler=sampler, 
+                            batch_sampler=sampler,
                             collate_fn=sampler.collate_fn,
                             num_workers=num_workers,
                             generator=generator,
     )
+
     return dataloader
 
-class ClusteredDataset(Dataset):
-    '''
-    Create a custom dataset for the clustered dataset.
-    The dataset is a dictionary with the identifier as the key, and the value is a dictionary with the label, list of sequences, and list of lengths.
-    '''
-    def __init__(self, dataset, 
-                 id_key: str = 'id',
-                 length_key: str = 'lengths',
-                 label_key: str = 'label',
-                 sequence_key: str = 'sequence',
-                 pad_to_multiple_of: int = 16,
-    ):
-        self.dataset = dataset
-        self.id_key = id_key
-        self.length_key = length_key
-        self.label_key = label_key
-        self.sequence_key = sequence_key
-        self.pad_to_multiple_of = pad_to_multiple_of
+# def make_normal_dataloader(config: VAETrainingConfig,
+#                            dataset: Dataset,
+#                            tokenizer: PreTrainedTokenizerFast,
+#                            max_len: int,
+#                            id_key: str = 'id',
+#                            length_key: str = 'length',
+#                            label_key: str = 'label',
+#                            sequence_key: str = 'sequence',
+#                            pad_to_multiple_of: int = 16,
+#                            drop_last: bool = False,
+#                            num_workers: int = 1,
+#                            generator: Optional[torch.Generator] = None,
+# ) -> DataLoader:
 
-    def __len__(self):
-        return len(self.dataset)
+#     sampler = BatchSampler(dataset,
+#                            tokenizer,
+#                            config.batch_size,
+#                            config.mega_batch,
+#                            max_length=max_len,
+#                            id_key=id_key,
+#                            length_key=length_key,
+#                            label_key=label_key,
+#                            sequence_key=sequence_key,
+#                            pad_to_multiple_of=pad_to_multiple_of,
+#                            drop_last=drop_last,
+#                            num_workers=num_workers,
+#                            generator=generator,
+#     )
 
-    def __getitem__(self, idx: Union[List[tuple[int, int]], tuple[int,int], List[int], int]): # Way too convoluted, I'm sorry.
-        '''
-        Get a sample from the dataset. Using two indices, the first index is the cluster index, and the second index is the sample index.
-        
-        If you choose a single index, or a list of single integers it will return the entire cluster.
-        '''
+#     clustered_dataset = ClusteredDataset(dataset,
+#                                          id_key=id_key,
+#                                          length_key=length_key,
+#                                          label_key=label_key,
+#                                          sequence_key=sequence_key,
+#                                          pad_to_multiple_of=pad_to_multiple_of,
+#     )
 
-        if isinstance(idx, tuple):
-            if isinstance(idx[0], int) and isinstance(idx[1], int):
-                idx = [idx]
+#     dataloader = DataLoader(clustered_dataset,
+#                             batch_sampler=sampler,
+#                             collate_fn=sampler.collate_fn,
+#                             num_workers=num_workers,
+#                             generator=generator,
+#     )
+#     return dataloader
 
-        if isinstance(idx, int):
-            idx = [(idx, i) for i in range(len(self.dataset[idx][self.label_key]))]
 
-        if isinstance(idx, list):
-            if isinstance(idx[0], int):
-                idx = [(index, i) for index in idx for i in range(len(self.dataset[index][self.label_key]))]
-        
-        clusterindex, sampleindex = zip(*idx)
-
-        data = self.dataset[clusterindex]
-
-        id = data[self.id_key]
-        length = []
-        label = []
-        sequence = []
-        
-        for i in range(len(idx)):
-            sampleindex_i = sampleindex[i]
-            length.append(data[self.length_key][i][sampleindex_i])
-            label.append(data[self.label_key][i][sampleindex_i])
-            sequence.append(data[self.sequence_key][i][sampleindex_i])
-
-        return {'id': id, 'length': length, 'label': label, 'sequence': sequence}
-
-class BatchSampler(Sampler): 
+class BatchSampler(Sampler):
     '''
     BatchSampler for variable length sequences, batching by similar lengths, to prevent excessive padding.
     '''
-    def __init__(self, 
-                 dataset: Dataset, 
+    def __init__(self,
+                 dataset: ClusteredDataset,
                  tokenizer: PreTrainedTokenizerFast,
-                 batch_size: int, 
-                 mega_batch_size: int, 
+                 batch_size: int,
+                 mega_batch_size: int,
                  max_length: Optional[int] = None,
-                 id_key: str = 'id',
-                 length_key: str = 'length',
-                 label_key: str = 'label',
-                 sequence_key: str = 'input_ids',
+                 id_key: str = 'clusterid', # should be the same as the output from ClusteredDataset
+                 length_key: str = 'length', # should be the same as the output from ClusteredDataset
+                 label_key: str = 'label', # should be the same as the output from ClusteredDataset
+                 sequence_key: str = 'sequence', # should be the same as the output from ClusteredDataset
                  pad_to_multiple_of: int = 16,
                  drop_last: bool = True,
                  num_workers: int = 1,
@@ -430,7 +485,7 @@ class BatchSampler(Sampler):
         label = torch.tensor(label)
 
         return {
-            'id': id, 
+            'id': id,
             'label': label,
             'sequence': sequence,
             'length': length,
@@ -438,43 +493,48 @@ class BatchSampler(Sampler):
             'attention_mask': attention_mask,
         }
 
-    def get_lengths(self, indices, return_dict, process_id):
-        return_dict[process_id] = [self.dataset[i][self.length_key] for i in indices]
+    def get_lengths(self, indices, return_dict, process_id, ids):
+        print(f"Process {process_id} started")
+        return_dict[process_id] = self.dataset.__get_len__(indices, ids)
+        print(f"Process {process_id} done")
 
     def __iter__(self):
+
         size = len(self.dataset)
-        # # old implementation
-        # indices = list(range(size))
-        # random.shuffle(indices)
-        indices = torch.randperm(size, generator=self.generator).tolist()
+
+        randperm = torch.randperm(size, generator=self.generator)
+        indices = self.dataset.unique_ids[randperm].tolist()
 
         step = self.mega_batch_size * self.batch_size
         for i in range(0, size, step):
             pool_indices = indices[i:i+step]
 
-            # New implementation
-            # Use torch.multiprocessing to get lengths
-            manager = mp.Manager()
-            return_dict = manager.dict()
-            processes = []
-            chunk_size = len(pool_indices) // self.num_workers
-            chunks = [pool_indices[j:j + chunk_size] for j in range(0, len(pool_indices), chunk_size)]
+            # Without multiprocessing
+            s1 = time.time()
+            pool_lengths = self.dataset.__get_len__(pool_indices)
+            print(f"Time to get lengths: {time.time() - s1}")
 
-            for process_id, chunk in enumerate(chunks):
-                p = mp.Process(target=self.get_lengths, args=(chunk, return_dict, process_id))
-                p.start()
-                processes.append(p)
+            # # With multiprocessing
+            # # TODO: make this parallel using multiprocessing (it takes a long time to get the lengths)
+            # s2 = time.time()
+            # manager = mp.Manager()
+            # return_dict = manager.dict()
+            # processes = []
+            # chunk_size = len(pool_indices) // self.num_workers
+            # ids = self.dataset.id
 
-            for p in processes:
-                p.join()
+            # for j in range(0, len(pool_indices), chunk_size):
+            #     process = mp.Process(target=self.get_lengths, args=(pool_indices[j:j+chunk_size], return_dict, j, ids))
+            #     processes.append(process)
+            #     process.start()
+
+            # for process in processes:
+            #     process.join()
             
-            # Retrieve results in order
-            pool_lengths = [length for process_id in sorted(return_dict.keys()) for length in return_dict[process_id]]
+            # pool_lengths = [return_dict[j] for j in range(0, len(pool_indices), chunk_size)]
+            # print(f"Time to get lengths with multiprocessing: {time.time() - s2}")
 
-            # # old implementation
-            # pool_lengths = [self.dataset[i]['length'] for i in pool_indices]
             sample_indices = [torch.randint(0, len(lenlist), (1,), generator=self.generator).item() for lenlist in pool_lengths]
-            # sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths] # New old implementation
             pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
 
             # Zip indices with sample indices and sort by length more efficiently
@@ -483,16 +543,13 @@ class BatchSampler(Sampler):
 
             pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
 
-            # # old implementation
-            # mega_batch_indices = list(range(0, len(pool), self.batch_size))
-            # random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
             mega_batch_indices = torch.randperm((len(pool) // self.batch_size) + 1, generator=self.generator).tolist()
             for j in mega_batch_indices:
                 if self.drop_last and j + self.batch_size > len(pool): # drop the last batch if it's too small
                     continue
 
                 batch = pool[j:j+self.batch_size] # (pool_id, sample_id). First is the id of the cluster, second is the id of the sample in the cluster.
-                
+
                 yield batch
 
     def __len__(self):
@@ -510,17 +567,17 @@ class TrainingVariables:
 
     def state_dict(self):
         return self.__dict__
-    
+
     def load_state_dict(self, state_dict):
         self.__dict__.update(state_dict)
 
 class VAETrainer:
-    def __init__(self, 
-                 model: AutoencoderKL1D, 
-                 tokenizer: PreTrainedTokenizerFast, 
-                 train_dataloader: DataLoader, 
-                 val_dataloader: DataLoader, 
-                 config: VAETrainingConfig, 
+    def __init__(self,
+                 model: AutoencoderKL1D,
+                 tokenizer: PreTrainedTokenizerFast,
+                 train_dataloader: DataLoader,
+                 val_dataloader: DataLoader,
+                 config: VAETrainingConfig,
                  test_dataloader: DataLoader = None,
                  training_variables: Optional[TrainingVariables] = None,
         ):
@@ -578,9 +635,9 @@ class VAETrainer:
             print(f"Updating max_len to {max_len}")
             self.train_dataloader.batch_sampler.max_length = max_len
 
-    def scale_gradients(self, 
-                        m: nn.Module, 
-                        n_tokens: int = 1, 
+    def scale_gradients(self,
+                        m: nn.Module,
+                        n_tokens: int = 1,
     ):
         '''
         Scale the gradients by dividing by the amount of tokens. Necessary for gradient accumulation with different length batches.
@@ -627,7 +684,7 @@ class VAETrainer:
             running_loss += loss.item()
             running_loss_ce += ce_loss.item()
             running_loss_kl += kl_loss.item()
-            
+
             if i == 0 and self.accelerator.is_main_process: # save the first sample each evaluation as a logoplot
                 logoplot_sample = output.sample[0]
                 # remove the padding
@@ -636,11 +693,11 @@ class VAETrainer:
                 logoplot_sample_id = batch['id'][0]
                 probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
                 pool = mp.Pool(1)
-                pool.apply_async(make_logoplot, 
+                pool.apply_async(make_logoplot,
                                 args=(
-                                    probs, 
-                                    logoplot_sample_id, 
-                                    f"{test_dir}/{name}_probs_{logoplot_sample_id}.png", 
+                                    probs,
+                                    logoplot_sample_id,
+                                    f"{test_dir}/{name}_probs_{logoplot_sample_id}.png",
                                     self.tokenizer.decode(range(self.tokenizer.vocab_size)),
                                 ),
                                 error_callback=lambda e: print(e),
@@ -670,7 +727,7 @@ class VAETrainer:
             seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
             # Save all samples as a FASTA file
-            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
+            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]),
                             description=
                             f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.3f}")
                             for i, seq in enumerate(seqs_pred)]
@@ -690,8 +747,8 @@ class VAETrainer:
         log_loss_ce = running_loss_ce / len(self.val_dataloader)
         log_loss_kl = running_loss_kl / len(self.val_dataloader)
         print(f"{name}, val_loss: {log_loss:.4f}, val_accuracy: {acc:.4f}, val_mu: {mu:.4f}, val_std: {std:.4f}")
-        logs = {"val_loss": log_loss, 
-                "val_ce_loss": log_loss_ce, 
+        logs = {"val_loss": log_loss,
+                "val_ce_loss": log_loss_ce,
                 "val_kl_loss": log_loss_kl,
                 "val_acc": acc,
                 "val_mu": mu,
@@ -704,8 +761,8 @@ class VAETrainer:
 
         # start the loop
         if self.accelerator.is_main_process:
-            self.ema = EMA(self.model, 
-                           beta = self.config.ema_decay, 
+            self.ema = EMA(self.model,
+                           beta = self.config.ema_decay,
                            update_after_step = self.config.ema_update_after,
                            update_every = self.config.ema_update_every
             )
@@ -719,10 +776,10 @@ class VAETrainer:
                 raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
             else:
                 raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
-                
+
             if self.config.push_to_hub:
                 raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
-            
+
             # Start the logging
             self.accelerator.init_trackers(
                 project_name=self.accelerator_config.logging_dir,
@@ -781,7 +838,7 @@ class VAETrainer:
                     )
 
                     # Loss calculation
-                    ce_loss, kl_loss = self.model.loss_fn(output, input) 
+                    ce_loss, kl_loss = self.model.loss_fn(output, input)
                     kl_weight = self.config.kl_weight * min(1.0, self.training_variables.global_step / (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
                     loss = ce_loss + kl_loss * kl_weight
                     loss_back = loss * attention_mask.sum() # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
@@ -805,11 +862,11 @@ class VAETrainer:
 
                 # Log the progress
                 progress_bar.update(1)
-                logs = {"train_loss": loss.detach().item(), 
-                        "train_ce_loss": ce_loss.detach().item(), 
-                        "train_kl_loss": kl_loss.detach().item(), 
+                logs = {"train_loss": loss.detach().item(),
+                        "train_ce_loss": ce_loss.detach().item(),
+                        "train_kl_loss": kl_loss.detach().item(),
                         "kl_weight": kl_weight,
-                        "lr": self.lr_scheduler.get_last_lr()[0], 
+                        "lr": self.lr_scheduler.get_last_lr()[0],
                         "step": self.training_variables.global_step,
                 }
                 progress_bar.set_postfix(**logs)
@@ -822,7 +879,7 @@ class VAETrainer:
 
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
                     self.accelerator.wait_for_everyone()
-                    
+
                     logs = self.evaluate(self.ema.ema_model)
                     self.accelerator.log(logs, step=self.training_variables.global_step)
 
@@ -833,7 +890,7 @@ class VAETrainer:
                         self.training_variables.val_loss = new_val_loss
                         self.accelerator.save_state()
                     self.model.train() # Make sure the model is in train mode
-                
+
                 self.accelerator.wait_for_everyone()
                 if self.training_variables.global_step % len(self.train_dataloader) == 0: # If it is the last batch of an Epoch, save the model for easy restart.
                     self.accelerator_config.automatic_checkpoint_naming = False
@@ -852,9 +909,9 @@ class VAETrainer:
 
         if output_dir is None:
             output_dir = os.path.join(self.config.output_dir, "pretrained")
-        
+
         os.makedirs(output_dir, exist_ok=True)
-        
+
         ce_model.save_pretrained(os.path.join(output_dir, "CE"))
         ema_model.save_pretrained(os.path.join(output_dir, "EMA"))
 
@@ -906,10 +963,10 @@ class ProtDiffusionTrainingConfig:
 
         if not self.overwrite_output_dir and os.path.exists(self.output_dir):
             raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
-        
+
         if self.push_to_hub:
             raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
-        
+
         assert self.optimizer in ["AdamW", "Adam", "SGD", "Adamax"], "Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`"
         assert self.mixed_precision in ["no", "fp16"], "Invalid mixed precision setting, choose between `no` and `fp16`" # TODO: implement fully
         assert self.max_len % self.pad_to_multiple_of == 0, "The maximum length of the input sequence must be a multiple of the pad_to_multiple_of parameter."
@@ -919,14 +976,14 @@ class ProtDiffusionTrainingConfig:
             assert self.max_len_start <= self.max_len, "The starting length of the input sequence must be less than or equal to the maximum length of the input sequence, or None."
 
 class ProtDiffusionTrainer:
-    def __init__(self, 
+    def __init__(self,
                  transformer: DiTTransformer1DModel,
-                 vae: AutoencoderKL1D, 
-                 tokenizer: PreTrainedTokenizerFast, 
-                 config: ProtDiffusionTrainingConfig, 
-                 train_dataloader: DataLoader, 
-                 val_dataloader: Optional[DataLoader] = None, 
-                 test_dataloader: Optional[DataLoader] = None,
+                 vae: AutoencoderKL1D,
+                 tokenizer: PreTrainedTokenizerFast,
+                 config: ProtDiffusionTrainingConfig,
+                 train_dataloader: DataLoader,
+                 val_dataset: Optional[ClusteredDataset] = None,
+                #  test_dataloader: Optional[DataLoader] = None,
                  training_variables: Optional[TrainingVariables] = None,
 
                  noise_scheduler: KarrasDiffusionSchedulers = None, # the scheduler to use for the diffusion
@@ -979,10 +1036,12 @@ class ProtDiffusionTrainer:
         self.transformer, self.vae, self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
             transformer, vae, optimizer, train_dataloader, lr_scheduler
         )
-        if test_dataloader is not None:
-            self.test_dataloader = self.accelerator.prepare(test_dataloader)
-        if val_dataloader is not None:
-            self.val_dataloader = self.accelerator.prepare(val_dataloader)
+        self.val_dataset = val_dataset
+        # if test_dataloader is not None:
+        #     self.test_dataloader = self.accelerator.prepare(test_dataloader)
+        # if val_dataloader is not None:
+        #     # self.val_dataloader = self.accelerator.prepare(val_dataloader)
+        #     self.val_dataloader = val_dataloader
         self.vae.eval() # Set the VAE to eval mode
         self.accelerator.register_for_checkpointing(self.training_variables)
 
@@ -999,9 +1058,9 @@ class ProtDiffusionTrainer:
             print(f"Updating max_len to {max_len}")
             self.train_dataloader.batch_sampler.max_length = max_len
 
-    def scale_gradients(self, 
-                        m: nn.Module, 
-                        n_tokens: int = 1, 
+    def scale_gradients(self,
+                        m: nn.Module,
+                        n_tokens: int = 1,
     ):
         '''
         Scale the gradients by dividing by the amount of tokens. Necessary for gradient accumulation with different length batches.
@@ -1021,11 +1080,9 @@ class ProtDiffusionTrainer:
         running_loss = 0.0
 
         for step, batch in enumerate(dataloader):
-            if step == 0:
-                print(f"evaluate step 1 id: {batch['id']}")
 
-            input_ids = batch['input_ids']
-            attention_mask = batch['attention_mask']
+            input_ids = batch['input_ids'].to(self.accelerator.device)
+            attention_mask = batch['attention_mask'].to(self.accelerator.device)
 
             vae_encoded = self.vae.encode(x = input_ids,
                                           attention_mask = attention_mask,
@@ -1033,25 +1090,34 @@ class ProtDiffusionTrainer:
 
             attention_mask = vae_encoded.attention_masks[-1]
             latent = vae_encoded.latent_dist.sample() # Mode is deterministic TODO: .sample() or .mode()?
-            label = batch['label']
+            label = batch['label'].to(self.accelerator.device)
 
             # Sample noise to add to the images
             noise = torch.randn(
-                latent.shape, 
+                latent.shape,
                 device=latent.device,
                 generator=generator,
             )
-            if self.config.use_batch_optimal_transport:
-                noise = reorder_noise_for_OT(latent, noise)
-            noise = noise * attention_mask.unsqueeze(1) # Mask the noise
-            bs = latent.shape[0]
 
             # Sample a random timestep for each image
+            bs = latent.shape[0]
             timesteps = torch.randint(
-                0, self.noise_scheduler.config.num_train_timesteps, (bs,), device=latent.device,
+                0, self.noise_scheduler.config.num_train_timesteps, (bs,),
+                device=latent.device,
                 dtype=torch.int64,
                 generator=generator,
             )
+
+            # Debugging
+            if step == 0:
+                print(f"evaluate step 1 id: {batch['id'][0]}")
+                print(f"evaluate step 1 noise: {noise[0][0][0]}")
+                print(f"evaluate step 1 timestep: {timesteps[0]}")
+
+            # Post-process the noise for optimal transport
+            if self.config.use_batch_optimal_transport:
+                noise = reorder_noise_for_OT(latent, noise)
+            noise = noise * attention_mask.unsqueeze(1) # Mask the noise
 
             # Add noise to the clean images according to the noise magnitude at each timestep
             noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
@@ -1064,7 +1130,7 @@ class ProtDiffusionTrainer:
                            timestep = timesteps,
                            class_labels = label,
             ).sample
-            
+
             # Loss calculation
             loss = F.mse_loss(output, noise, reduction='none').mean(dim=1) * attention_mask # Mean over the channel dimension, Mask the loss
             loss = loss.sum() / attention_mask.sum() # Average the loss over the non-masked tokens
@@ -1107,11 +1173,11 @@ class ProtDiffusionTrainer:
         logoplot_sample_cl = class_labels[0]
         probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
         pool = mp.Pool(1)
-        pool.apply_async(make_logoplot, 
+        pool.apply_async(make_logoplot,
                         args=(
-                            probs, 
-                            name, 
-                            f"{test_dir}/{name}_length_{logoplot_sample_len}_class_label_{logoplot_sample_cl}.png", 
+                            probs,
+                            name,
+                            f"{test_dir}/{name}_length_{logoplot_sample_len}_class_label_{logoplot_sample_cl}.png",
                             self.tokenizer.decode(range(self.tokenizer.vocab_size)),
                         ),
                         error_callback=lambda e: print(e),
@@ -1128,17 +1194,17 @@ class ProtDiffusionTrainer:
         # seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
         # Save all samples as a FASTA file
-        seq_record_list = [SeqRecord(Seq(seq), id=str(seqs_lens[i]), 
+        seq_record_list = [SeqRecord(Seq(seq), id=str(seqs_lens[i]),
                         description=
                         f"length: {seqs_lens[i]} label: {class_labels[i]}")
                         for i, seq in enumerate(seqs_pred)]
 
         with open(f"{test_dir}/{name}.fa", "a") as f:
             SeqIO.write(seq_record_list, f, "fasta")
-        
+
         # print(f"{name}, val_loss: {log_loss:.4f}, val_accuracy: {acc:.4f}")
-        # logs = {"val_loss": log_loss, 
-        #         "val_ce_loss": log_loss_ce, 
+        # logs = {"val_loss": log_loss,
+        #         "val_ce_loss": log_loss_ce,
         #         "val_kl_loss": log_loss_kl,
         #         "val_acc": acc,
         #         }
@@ -1150,8 +1216,8 @@ class ProtDiffusionTrainer:
 
         # start the loop
         if self.accelerator.is_main_process:
-            self.ema = EMA(self.transformer, 
-                           beta = self.config.ema_decay, 
+            self.ema = EMA(self.transformer,
+                           beta = self.config.ema_decay,
                            update_after_step = self.config.ema_update_after,
                            update_every = self.config.ema_update_every
             )
@@ -1165,10 +1231,10 @@ class ProtDiffusionTrainer:
                 raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
             else:
                 raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
-                
+
             if self.config.push_to_hub:
                 raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
-            
+
             # Start the logging
             self.accelerator.init_trackers(
                 project_name=self.accelerator_config.logging_dir,
@@ -1210,7 +1276,7 @@ class ProtDiffusionTrainer:
 
             for step, batch in enumerate(dataloader):
                 if step == 0:
-                    print(f"training step 1 id: {batch['id']}")
+                    print(f"training step 1 id: {batch['id'][0]}")
 
                 input_ids = batch['input_ids']
                 attention_mask = batch['attention_mask']
@@ -1254,7 +1320,7 @@ class ProtDiffusionTrainer:
                                               timestep = timesteps,
                                               class_labels = label,
                     ).sample
-                    
+
                     # Loss calculation
                     loss = F.mse_loss(output, noise, reduction='none').mean(dim=1) * attention_mask # Mean over the channel dimension, Mask the loss
                     loss = loss.sum() / attention_mask.sum() # Average the loss over the non-masked tokens
@@ -1269,7 +1335,7 @@ class ProtDiffusionTrainer:
                         n_tokens = 0
                         if self.config.gradient_clip_val is not None:
                             self.accelerator.clip_grad_norm_(self.transformer.parameters(), self.config.gradient_clip_val)
-                    
+
                     # Update the model
                     self.optimizer.step()
                     self.lr_scheduler.step()
@@ -1279,8 +1345,8 @@ class ProtDiffusionTrainer:
 
                 # Log the progress
                 progress_bar.update(1)
-                logs = {"train_loss": loss.detach().item(), 
-                        "lr": self.lr_scheduler.get_last_lr()[0], 
+                logs = {"train_loss": loss.detach().item(),
+                        "lr": self.lr_scheduler.get_last_lr()[0],
                         "step": self.training_variables.global_step,
                 }
                 progress_bar.set_postfix(**logs)
@@ -1293,7 +1359,7 @@ class ProtDiffusionTrainer:
 
                 # Evaluation and saving the model
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
-                    
+
                     # Test of inference
                     self.accelerator.wait_for_everyone()
                     pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
@@ -1301,21 +1367,30 @@ class ProtDiffusionTrainer:
 
                     # Evaluation
                     self.accelerator.wait_for_everyone()
-                    dataloader = deepcopy(self.val_dataloader)
-                    generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
-                    logs = self.evaluate(model = self.ema.ema_model,
-                                        dataloader = self.val_dataloader,
-                                        generator = generator,
-                    )
-                    del dataloader
-                    self.accelerator.log(logs, step=self.training_variables.global_step)
                     if self.accelerator.is_main_process:
-                        self.accelerator.save_state()
-                    self.transformer.train() # Make sure the model is in train mode
+                        generator_cuda = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
+                        generator_cpu = torch.Generator().manual_seed(self.config.seed)
+                        val_dataloader = make_clustered_dataloader(self.config.batch_size,
+                                                                self.config.mega_batch,
+                                                                self.val_dataset,
+                                                                tokenizer=self.tokenizer,
+                                                                max_len=self.config.max_len,
+                                                                num_workers=1,
+                                                                generator=generator_cpu,
+                        )
+                        logs = self.evaluate(model = self.ema.ema_model,
+                                            dataloader = val_dataloader,
+                                            generator = generator_cuda,
+                        )
+                        del val_dataloader
+
+                        self.accelerator.log(logs, step=self.training_variables.global_step)
+                        if self.accelerator.is_main_process:
+                            self.accelerator.save_state()
 
             # After every epoch
             if self.config.save_every_epoch:
-            
+
                 # Test of inference
                 self.accelerator.wait_for_everyone()
                 pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
@@ -1323,17 +1398,29 @@ class ProtDiffusionTrainer:
 
                 # Evaluation
                 self.accelerator.wait_for_everyone()
-                dataloader = deepcopy(self.val_dataloader)
-                generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
-                logs = self.evaluate(model = self.ema.ema_model,
-                                     dataloader = self.val_dataloader,
-                                     generator = generator,
-                )
-                del dataloader
-                self.accelerator.log(logs, step=self.training_variables.global_step)
                 if self.accelerator.is_main_process:
-                    self.accelerator.save_state()
-                self.transformer.train() # Make sure the model is in train mode
+                    generator_cuda = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
+                    generator_cpu = torch.Generator().manual_seed(self.config.seed)
+                    val_dataloader = make_clustered_dataloader(self.config.batch_size,
+                                                            self.config.mega_batch,
+                                                            self.val_dataset,
+                                                            tokenizer=self.tokenizer,
+                                                            max_len=self.config.max_len,
+                                                            num_workers=1,
+                                                            generator=generator_cpu,
+                    )
+                    logs = self.evaluate(model = self.ema.ema_model,
+                                        dataloader = val_dataloader,
+                                        generator = generator_cuda,
+                    )
+                    del val_dataloader
+
+                    self.accelerator.log(logs, step=self.training_variables.global_step)
+                    if self.accelerator.is_main_process:
+                        self.accelerator.save_state()
+
+            gc.collect()
+            torch.cuda.empty_cache() # https://github.com/pytorch/pytorch/issues/13246#issuecomment-529185354
 
         # After training
         self.accelerator.end_training()
@@ -1346,8 +1433,8 @@ class ProtDiffusionTrainer:
 
         if output_dir is None:
             output_dir = os.path.join(self.config.output_dir, "pretrained")
-        
+
         os.makedirs(output_dir, exist_ok=True)
-        
+
         ce_model.save_pretrained(os.path.join(output_dir, "CE"))
         ema_model.save_pretrained(os.path.join(output_dir, "EMA"))

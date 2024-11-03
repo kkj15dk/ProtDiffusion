@@ -35,11 +35,13 @@ set_seed(config.seed) # Set the random seed for reproducibility
 generator = torch.Generator().manual_seed(config.seed)
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
-dataset = load_from_disk('/work3/s204514/PKSs_grouped')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
 train_dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kaspe/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+# Get pretrained models
+vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.2
@@ -56,9 +58,6 @@ test_dataset = val_test_split['test']
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
 
-# Get pretrained models
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
-vae = AutoencoderKL1D.from_pretrained('/zhome/fb/0/155603/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 12")
@@ -69,6 +68,7 @@ train_dataloader = make_clustered_dataloader(config,
                                    max_len=config.max_len_start,
                                    num_workers=num_workers,
                                    generator=generator,
+                                   shuffle=True,
 )
 val_dataloader = make_clustered_dataloader(config, 
                                  val_dataset, 
@@ -81,8 +81,6 @@ val_dataloader = make_clustered_dataloader(config,
 
 print("length of train dataloader: ", len(train_dataloader))
 print("length of val dataloader: ", len(val_dataloader))
-
-vae = AutoencoderKL1D.from_pretrained('/home/kaspe/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
 # %%
 transformer = DiTTransformer1DModel(
@@ -113,7 +111,6 @@ Trainer = ProtDiffusionTrainer(transformer=transformer,
                                train_dataloader=train_dataloader,
                                val_dataloader=val_dataloader,
                                test_dataloader=None,
-                               config=config,
                                noise_scheduler = noise_scheduler, # the scheduler to use for the diffusion
                                eval_seq_len = [4096, 4096, 1024, 1024], # the sequence lengths to evaluate on
                                eval_class_labels = [0,1,0,1], # the class labels to evaluate on, should be a list the same length as the eval batch size

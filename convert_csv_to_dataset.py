@@ -133,8 +133,3 @@ else:
     print(f"{filename_grouped} already grouped")
 
 print('Doen')
-
-# %%
-
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
-print(dataset)

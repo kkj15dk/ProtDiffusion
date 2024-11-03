@@ -406,7 +406,9 @@ class BatchSampler(Sampler):
             label.append(item[self.label_key])
 
             # sequence
-            seq = process_sequence(item[self.sequence_key])
+            seq = item[self.sequence_key]
+            seq = str(seq, encoding='utf-8')
+            seq = process_sequence(seq)
             seq_len = item[self.length_key]
 
             if seq_len > max_len:
@@ -1018,7 +1020,7 @@ class ProtDiffusionTrainer:
         model.eval()
         dataloader = self.val_dataloader
         if dataloader.batch_sampler.shuffle == False:
-            generator = torch.Generator().manual_seed(self.config.seed)
+            generator = torch.Generator().manual_seed(self.config.seed).to(self.accelerator.device)
         else:
             generator = None
 
@@ -1307,13 +1309,7 @@ class ProtDiffusionTrainer:
 
                     # Evaluation
                     self.accelerator.wait_for_everyone()
-                    dataloader = deepcopy(self.val_dataloader)
-                    generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
-                    logs = self.evaluate(model = self.ema.ema_model,
-                                        dataloader = self.val_dataloader,
-                                        generator = generator,
-                    )
-                    del dataloader
+                    logs = self.evaluate()
                     self.accelerator.log(logs, step=self.training_variables.global_step)
                     if self.accelerator.is_main_process:
                         self.accelerator.save_state()
@@ -1329,13 +1325,7 @@ class ProtDiffusionTrainer:
 
                 # Evaluation
                 self.accelerator.wait_for_everyone()
-                dataloader = deepcopy(self.val_dataloader)
-                generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
-                logs = self.evaluate(model = self.ema.ema_model,
-                                     dataloader = self.val_dataloader,
-                                     generator = generator,
-                )
-                del dataloader
+                logs = self.evaluate()
                 self.accelerator.log(logs, step=self.training_variables.global_step)
                 if self.accelerator.is_main_process:
                     self.accelerator.save_state()

@@ -12,15 +12,15 @@ from ProtDiffusion.models.dit_transformer_1d import DiTTransformer1DModel
 import os
 
 config = ProtDiffusionTrainingConfig(
-    num_epochs=100, # the number of epochs to train for
-    batch_size=6,
+    num_epochs=3000, # the number of epochs to train for
+    batch_size=16,
     mega_batch=50,
-    gradient_accumulation_steps=16,
+    gradient_accumulation_steps=2,
     learning_rate = 1e-5,
     lr_warmup_steps = 200,
     save_image_model_steps = 320,
     save_every_epoch = True,
-    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v1.5"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v1.8"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=4096, # 512 * 2**6
@@ -36,7 +36,6 @@ generator = torch.Generator().manual_seed(config.seed)
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
 dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
-dataset = dataset.with_format("numpy")
 train_dataset = dataset.shuffle(config.seed)
 
 # %%

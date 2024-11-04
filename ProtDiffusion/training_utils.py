@@ -286,12 +286,15 @@ class ClusteredDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx: List[List[int]]): # Way too convoluted, I'm sorry.
+    def __getitem__(self, idx: Union[List[List[int]], torch.Tensor]): # Way too convoluted, I'm sorry.
         '''
         Get a sample from the dataset. Using two indices, the first index is the cluster index, and the second index is the sample index.
         
         If you choose a single index, or a list of single integers it will return the entire cluster.
         '''
+
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
 
         assert isinstance(idx, List), "The index must be a list"
         assert all(isinstance(i, List) for i in idx), "The index must be a list of lists"
@@ -300,8 +303,6 @@ class ClusteredDataset(Dataset):
 
         clusterindex = [pair[0] for pair in idx]
         sampleindex = [pair[1] for pair in idx]
-        print("clusteri: ", clusterindex)
-        print("samplei: ", sampleindex)
 
         data = self.dataset[clusterindex]
 
@@ -321,7 +322,6 @@ class ClusteredDataset(Dataset):
         sequence = np.array(sequence)
 
         out = {'id': id, 'length': length, 'label': label, 'sequence': sequence}
-        print(out)
 
         return out
 
@@ -392,9 +392,9 @@ class BatchSampler(Sampler):
         '''
 
         # assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertion on the dataset level.
-        print(batch)
-        length_list = batch[self.length_key]
-        sample_max_len = max(length)
+
+        length_list = [item[self.length_key] for item in batch]
+        sample_max_len = max(length_list)
         max_length_cap = self.max_length
 
         if max_length_cap is not None:
@@ -520,7 +520,7 @@ class BatchSampler(Sampler):
                 if self.drop_last and j + self.batch_size > pool.shape[0]: # drop the last batch if it's too small
                     continue
 
-                batch = pool[j:j+self.batch_size].tolist() # (pool_id, sample_id). First is the id of the cluster, second is the id of the sample in the cluster.
+                batch = pool[j:j+self.batch_size] # (pool_id, sample_id). First is the id of the cluster, second is the id of the sample in the cluster.
 
                 yield batch
 
@@ -1055,8 +1055,8 @@ class ProtDiffusionTrainer:
 
         for step, batch in enumerate(dataloader):
             input_ids = batch['input_ids']
-            if step == 0:
-                print(input_ids[0])
+            # if step == 0:
+            #     print(input_ids[0])
             attention_mask = batch['attention_mask']
 
             vae_encoded: EncoderKLOutput1D = self.vae.encode(x = input_ids,
@@ -1075,7 +1075,7 @@ class ProtDiffusionTrainer:
             )
 
             if self.config.use_batch_optimal_transport:
-                noise = reorder_noise_for_OT(latent, noise, debug=True if step == 0 else False)
+                noise = reorder_noise_for_OT(latent, noise)
             
             noise = noise * attention_mask.unsqueeze(1) # Mask the noise
             bs = latent.shape[0]
@@ -1326,10 +1326,13 @@ class ProtDiffusionTrainer:
                 # Evaluation and saving the model
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
                     
-                    # Test of inference
-                    self.accelerator.wait_for_everyone()
-                    pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
-                    self.inference_test(pipeline)
+            #### My RAM gats eaten somewhere here
+                    # # Test of inference
+                    # self.accelerator.wait_for_everyone()
+                    # pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                    # self.inference_test(pipeline)
+            #### My RAM gats eaten somewhere here
+
 
                     # Evaluation
                     self.accelerator.wait_for_everyone()
@@ -1342,11 +1345,13 @@ class ProtDiffusionTrainer:
             # After every epoch
             torch.cuda.empty_cache()
             if self.config.save_every_epoch:
-            
-                # Test of inference
-                self.accelerator.wait_for_everyone()
-                pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
-                self.inference_test(pipeline)
+
+            #### My RAM gats eaten somewhere here
+                # # Test of inference
+                # self.accelerator.wait_for_everyone()
+                # pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                # self.inference_test(pipeline)
+            #### My RAM gats eaten somewhere here
 
                 # Evaluation
                 self.accelerator.wait_for_everyone()

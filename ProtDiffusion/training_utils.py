@@ -188,25 +188,27 @@ def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor
     noise = sorted_xt.reshape(B, C, L)
     return noise
 
-def make_clustered_dataloader(config: VAETrainingConfig,
-                        dataset: Dataset,
-                        tokenizer: PreTrainedTokenizerFast,
-                        max_len: int,
-                        id_key: str = 'id',
-                        length_key: str = 'length',
-                        label_key: str = 'label',
-                        sequence_key: str = 'sequence',
-                        pad_to_multiple_of: int = 16,
-                        drop_last: bool = False,
-                        num_workers: int = 1,
-                        generator: Optional[torch.Generator] = None,
-                        shuffle: bool = True,
+def make_clustered_dataloader(batch_size: int,
+                              mega_batch: int,
+                              dataset: Dataset,
+                              tokenizer: PreTrainedTokenizerFast,
+                              max_len: int,
+                              id_key: str = 'id',
+                              length_key: str = 'length',
+                              label_key: str = 'label',
+                              sequence_key: str = 'sequence',
+                              pad_to_multiple_of: int = 16,
+                              drop_last: bool = False,
+                              num_workers: int = 1,
+                              generator: Optional[torch.Generator] = None,
+                              seed: int = 42,
+                              shuffle: bool = True,
 ) -> DataLoader:
 
     sampler = BatchSampler(dataset,
                            tokenizer,
-                           config.batch_size,
-                           config.mega_batch,
+                           batch_size,
+                           mega_batch,
                            max_length=max_len,
                            id_key=id_key,
                            length_key=length_key,
@@ -216,6 +218,7 @@ def make_clustered_dataloader(config: VAETrainingConfig,
                            drop_last=drop_last,
                            num_workers=num_workers,
                            generator=generator,
+                           seed=seed,
                            shuffle=shuffle,
     )
 
@@ -334,6 +337,10 @@ class ClusteredDataset(Dataset):
             length.append(data[self.length_key][i][sampleindex_i])
             label.append(data[self.label_key][i][sampleindex_i])
             sequence.append(data[self.sequence_key][i][sampleindex_i])
+        
+        length = np.array(length)
+        label = np.array(label)
+        sequence = np.array(sequence)
 
         return {'id': id, 'length': length, 'label': label, 'sequence': sequence}
 
@@ -355,6 +362,7 @@ class BatchSampler(Sampler):
                  drop_last: bool = True,
                  num_workers: int = 1,
                  generator: Optional[torch.Generator] = None,
+                 seed: int = 42,
                  shuffle: bool = True,
     ):
         self.tokenizer = tokenizer
@@ -370,7 +378,7 @@ class BatchSampler(Sampler):
         self.dataset = dataset
         self.num_workers = num_workers
         self.generator = generator
-        self.seed = generator.seed()
+        self.seed = seed
         self.shuffle = shuffle
 
     def collate_fn(self, batch):
@@ -383,7 +391,7 @@ class BatchSampler(Sampler):
         Returns a dictionary with the keys 'id', 'label', and 'sequence'.
         '''
 
-        assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertiong on the dataset level.
+        assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertion on the dataset level.
 
         length = [item[self.length_key] for item in batch]
         sample_max_len = max(length)
@@ -427,30 +435,30 @@ class BatchSampler(Sampler):
         input_ids = tokenized['input_ids']
         attention_mask = tokenized['attention_mask'].to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
         label = torch.tensor(label)
+        length = torch.tensor(length)
+        id = np.array(id).astype(np.string_)
 
         return {
             'id': id, 
             'label': label,
-            'sequence': sequence,
+            # 'sequence': sequence,
             'length': length,
             'input_ids': input_ids,
             'attention_mask': attention_mask,
         }
 
     def get_lengths(self, indices, return_dict, process_id):
-        return_dict[process_id] = [self.dataset[i][self.length_key] for i in indices]
+        return_dict[process_id] = self.dataset[indices][self.length_key]
 
     def __iter__(self):
 
+        # If shuffle is false, we remake the generator each epoch for deterministic val loaders
         if self.shuffle == False:
-            print("generator seed: ", self.seed)
             self.generator = torch.Generator().manual_seed(self.seed)
 
         size = len(self.dataset)
-        # # old implementation
-        # indices = list(range(size))
-        # random.shuffle(indices)
-        indices = torch.randperm(size, generator=self.generator).tolist()
+
+        indices = torch.randperm(size, generator=self.generator)
 
         step = self.mega_batch_size * self.batch_size
         for i in range(0, size, step):
@@ -461,8 +469,8 @@ class BatchSampler(Sampler):
             manager = mp.Manager()
             return_dict = manager.dict()
             processes = []
-            chunk_size = len(pool_indices) // self.num_workers
-            chunks = [pool_indices[j:j + chunk_size] for j in range(0, len(pool_indices), chunk_size)]
+            chunk_size = step // self.num_workers
+            chunks = [pool_indices[j:j + chunk_size] for j in range(0, step, chunk_size)]
 
             for process_id, chunk in enumerate(chunks):
                 p = mp.Process(target=self.get_lengths, args=(chunk, return_dict, process_id))
@@ -487,10 +495,8 @@ class BatchSampler(Sampler):
 
             pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
 
-            # # old implementation
-            # mega_batch_indices = list(range(0, len(pool), self.batch_size))
-            # random.shuffle(mega_batch_indices) # shuffle the mega batches, so that the model doesn't see the same order of lengths every time. The small batch will however always be the one with longest lengths
-            mega_batch_indices = torch.randperm((len(pool) // self.batch_size) + 1, generator=self.generator).tolist()
+
+            mega_batch_indices = torch.randperm((len(pool) // self.batch_size) + 1, generator=self.generator)
             for j in mega_batch_indices:
                 if self.drop_last and j + self.batch_size > len(pool): # drop the last batch if it's too small
                     continue
@@ -637,7 +643,7 @@ class VAETrainer:
                 # remove the padding
                 logoplot_sample_len = length[0]
                 logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
-                logoplot_sample_id = batch['id'][0]
+                logoplot_sample_id = str(batch['id'][0], encoding='ut-8')
                 probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
                 pool = mp.Pool(1)
                 pool.apply_async(make_logoplot, 
@@ -674,7 +680,7 @@ class VAETrainer:
             seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
             # Save all samples as a FASTA file
-            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
+            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i], encoding='utf-8'), 
                             description=
                             f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.3f}")
                             for i, seq in enumerate(seqs_pred)]
@@ -1020,7 +1026,7 @@ class ProtDiffusionTrainer:
         model.eval()
         dataloader = self.val_dataloader
         if dataloader.batch_sampler.shuffle == False:
-            generator = torch.Generator().manual_seed(self.config.seed).to(self.accelerator.device)
+            generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
         else:
             generator = None
 
@@ -1029,8 +1035,6 @@ class ProtDiffusionTrainer:
         running_loss = 0.0
 
         for step, batch in enumerate(dataloader):
-            if step == 0:
-                print(f"evaluate step 1 id: {batch['id']}")
 
             input_ids = batch['input_ids']
             attention_mask = batch['attention_mask']
@@ -1051,6 +1055,7 @@ class ProtDiffusionTrainer:
             )
             if self.config.use_batch_optimal_transport:
                 noise = reorder_noise_for_OT(latent, noise)
+            
             noise = noise * attention_mask.unsqueeze(1) # Mask the noise
             bs = latent.shape[0]
 
@@ -1060,6 +1065,10 @@ class ProtDiffusionTrainer:
                 dtype=torch.int64,
                 generator=generator,
             )
+            if step == 0:
+                print(f"eval step 1 id: {str(batch['id'][0], encoding = 'utf-8')}")
+                print(f"eval step 1 noise: {noise[0][0][0]}")
+                print(f"eval step 1 timestep: {timesteps[0]}")
 
             # Add noise to the clean images according to the noise magnitude at each timestep
             noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
@@ -1218,7 +1227,7 @@ class ProtDiffusionTrainer:
 
             for step, batch in enumerate(dataloader):
                 if step == 0:
-                    print(f"training step 1 id: {batch['id']}")
+                    print(f"training step 1 id: {str(batch['id'][0], encoding='utf-8')}")
 
                 input_ids = batch['input_ids']
                 attention_mask = batch['attention_mask']
@@ -1316,6 +1325,7 @@ class ProtDiffusionTrainer:
                     self.transformer.train() # Make sure the model is in train mode
 
             # After every epoch
+            torch.cuda.empty_cache()
             if self.config.save_every_epoch:
             
                 # Test of inference

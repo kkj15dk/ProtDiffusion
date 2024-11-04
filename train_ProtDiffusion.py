@@ -20,7 +20,7 @@ config = ProtDiffusionTrainingConfig(
     lr_warmup_steps = 200,
     save_image_model_steps = 320,
     save_every_epoch = True,
-    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v1.4"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v1.5"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=4096, # 512 * 2**6
@@ -60,23 +60,28 @@ print(f"Train dataset length: {len(train_dataset)}")
 
 
 print("num cpu cores:", os.cpu_count())
-print("setting num_workers to 12")
-num_workers = 12
-train_dataloader = make_clustered_dataloader(config, 
-                                   train_dataset,
-                                   tokenizer=tokenizer,
-                                   max_len=config.max_len_start,
-                                   num_workers=num_workers,
-                                   generator=generator,
-                                   shuffle=True,
+print("setting num_workers to 16")
+num_workers = 16
+
+train_dataloader = make_clustered_dataloader(config.batch_size,
+                                             config.mega_batch,
+                                             train_dataset,
+                                             tokenizer=tokenizer,
+                                             max_len=config.max_len_start,
+                                             num_workers=num_workers,
+                                             generator=generator,
+                                             seed=config.seed,
+                                             shuffle=True,
 )
-val_dataloader = make_clustered_dataloader(config, 
-                                 val_dataset, 
-                                 tokenizer=tokenizer,
-                                 max_len=config.max_len, 
-                                 num_workers=1,
-                                 generator=generator,
-                                 shuffle=False,
+val_dataloader = make_clustered_dataloader(config.batch_size,
+                                           config.mega_batch,
+                                           val_dataset, 
+                                           tokenizer=tokenizer,
+                                           max_len=config.max_len, 
+                                           num_workers=1,
+                                           generator=generator,
+                                           seed=config.seed,
+                                           shuffle=False,
 )
 
 print("length of train dataloader: ", len(train_dataloader))

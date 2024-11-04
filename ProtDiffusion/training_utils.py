@@ -33,6 +33,7 @@ from tqdm import tqdm
 import ot
 
 from .models.autoencoder_kl_1d import AutoencoderKL1D
+from .models.vae import EncoderKLOutput1D
 from .models.dit_transformer_1d import DiTTransformer1DModel
 from .models.pipeline_protein import ProtDiffusionPipeline, logits_to_token_ids
 from .visualization_utils import make_logoplot
@@ -128,23 +129,6 @@ def round_length(length: int, pad: int = 2, rounding: int = 16) -> int:
     '''
     return int(np.ceil((length + pad) / rounding) * rounding)
 
-def process_sequence(sequence: str,
-                     bos_token: str = "[",
-                     eos_token: str = "]",
-                     pad_token: str = "-",
-) -> str:
-    '''
-    Process the sequence by adding the bos and eos tokens, and padding it to a multiple of 16 (or what the variable is set to in the round_kength).
-    Return the sequence and the length of the sequence.
-    '''
-    seq_len = round_length(len(sequence))
-    sequence = bos_token + sequence + eos_token
-    len_diff = seq_len - len(sequence)
-    rand_int = random.randint(0, len_diff)
-    sequence = pad_token * rand_int + sequence + pad_token * (len_diff - rand_int)
-
-    return sequence
-
 def calculate_stats(averages: List[int], standard_deviations: List[int], num_elements: List[int]):
     '''
     Calculate the mean and standard deviation of the latent space.
@@ -161,7 +145,7 @@ def calculate_stats(averages: List[int], standard_deviations: List[int], num_ele
 
     return mu, standard_dev
 
-def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor
+def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor, debug: bool = False
     ) -> torch.Tensor: # TODO: make the for loop faster (AKA, don't use a for loop, you dingus)
     '''
     Reorder the noise tensor to have pairings for optimal transport with respect to the latent tensor.
@@ -185,7 +169,7 @@ def reorder_noise_for_OT(latent: torch.Tensor, noise: torch.Tensor
                 if bool_g[i, j]:
                     sorted_xt[i] = xt[j]
 
-    noise = sorted_xt.reshape(B, C, L)
+    noise = sorted_xt.view(B, C, L)
     return noise
 
 def make_clustered_dataloader(batch_size: int,
@@ -200,7 +184,6 @@ def make_clustered_dataloader(batch_size: int,
                               pad_to_multiple_of: int = 16,
                               drop_last: bool = False,
                               num_workers: int = 1,
-                              generator: Optional[torch.Generator] = None,
                               seed: int = 42,
                               shuffle: bool = True,
 ) -> DataLoader:
@@ -217,7 +200,6 @@ def make_clustered_dataloader(batch_size: int,
                            pad_to_multiple_of=pad_to_multiple_of,
                            drop_last=drop_last,
                            num_workers=num_workers,
-                           generator=generator,
                            seed=seed,
                            shuffle=shuffle,
     )
@@ -234,7 +216,6 @@ def make_clustered_dataloader(batch_size: int,
                             batch_sampler=sampler, 
                             collate_fn=sampler.collate_fn,
                             num_workers=num_workers,
-                            generator=generator,
     )
     return dataloader
 
@@ -305,29 +286,26 @@ class ClusteredDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx: Union[List[tuple[int, int]], tuple[int,int], List[int], int]): # Way too convoluted, I'm sorry.
+    def __getitem__(self, idx: List[List[int]]): # Way too convoluted, I'm sorry.
         '''
         Get a sample from the dataset. Using two indices, the first index is the cluster index, and the second index is the sample index.
         
         If you choose a single index, or a list of single integers it will return the entire cluster.
         '''
 
-        if isinstance(idx, tuple):
-            if isinstance(idx[0], int) and isinstance(idx[1], int):
-                idx = [idx]
+        assert isinstance(idx, List), "The index must be a list"
+        assert all(isinstance(i, List) for i in idx), "The index must be a list of lists"
+        assert all(len(i) == 2 for i in idx), "The index must be a list of lists with two elements"
+        assert all(isinstance(i, int) for pair in idx for i in pair), "The elements of the index must be integers"
 
-        if isinstance(idx, int):
-            idx = [(idx, i) for i in range(len(self.dataset[idx][self.label_key]))]
-
-        if isinstance(idx, list):
-            if isinstance(idx[0], int):
-                idx = [(index, i) for index in idx for i in range(len(self.dataset[index][self.label_key]))]
-        
-        clusterindex, sampleindex = zip(*idx)
+        clusterindex = [pair[0] for pair in idx]
+        sampleindex = [pair[1] for pair in idx]
+        print("clusteri: ", clusterindex)
+        print("samplei: ", sampleindex)
 
         data = self.dataset[clusterindex]
 
-        id = data[self.id_key]
+        id = data[self.id_key].astype(np.string_)
         length = []
         label = []
         sequence = []
@@ -342,7 +320,10 @@ class ClusteredDataset(Dataset):
         label = np.array(label)
         sequence = np.array(sequence)
 
-        return {'id': id, 'length': length, 'label': label, 'sequence': sequence}
+        out = {'id': id, 'length': length, 'label': label, 'sequence': sequence}
+        print(out)
+
+        return out
 
 class BatchSampler(Sampler): 
     '''
@@ -361,7 +342,6 @@ class BatchSampler(Sampler):
                  pad_to_multiple_of: int = 16,
                  drop_last: bool = True,
                  num_workers: int = 1,
-                 generator: Optional[torch.Generator] = None,
                  seed: int = 42,
                  shuffle: bool = True,
     ):
@@ -377,9 +357,29 @@ class BatchSampler(Sampler):
         self.pad_to_multiple_of = pad_to_multiple_of
         self.dataset = dataset
         self.num_workers = num_workers
-        self.generator = generator
         self.seed = seed
+        self.generator = torch.Generator().manual_seed(seed)
         self.shuffle = shuffle
+
+    def process_sequence(self,
+                     sequence: str,
+                     bos_token: str = "[",
+                     eos_token: str = "]",
+                     pad_token: str = "-",
+    ) -> str:
+        '''
+        Process the sequence by adding the bos and eos tokens, and padding it to a multiple of 16 (or what the variable is set to in the round_kength).
+        Return the sequence and the length of the sequence.
+        '''
+        seq_len = round_length(len(sequence))
+        sequence = bos_token + sequence + eos_token
+        len_diff = seq_len - len(sequence)
+        if len_diff == 0:
+            return sequence
+        rand_int = torch.randint(0, len_diff, (1,), generator=self.generator).item()
+        sequence = pad_token * rand_int + sequence + pad_token * (len_diff - rand_int)
+
+        return sequence
 
     def collate_fn(self, batch):
         '''
@@ -391,9 +391,9 @@ class BatchSampler(Sampler):
         Returns a dictionary with the keys 'id', 'label', and 'sequence'.
         '''
 
-        assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertion on the dataset level.
-
-        length = [item[self.length_key] for item in batch]
+        # assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertion on the dataset level.
+        print(batch)
+        length_list = batch[self.length_key]
         sample_max_len = max(length)
         max_length_cap = self.max_length
 
@@ -402,30 +402,31 @@ class BatchSampler(Sampler):
         else:
             max_len = sample_max_len
 
-        id = []
-        sequence = []
-        label = []
+        id_list = []
+        seq_list = []
+        label_list = []
 
         for i, item in enumerate(batch):
             # id
-            id.append(item[self.id_key])
+            id = str(item[self.id_key], encoding = 'utf-8')
+            id_list.append(id)
 
             # label
-            label.append(item[self.label_key])
+            label_list.append(item[self.label_key])
 
             # sequence
             seq = item[self.sequence_key]
             seq = str(seq, encoding='utf-8')
-            seq = process_sequence(seq)
+            seq = self.process_sequence(seq)
             seq_len = item[self.length_key]
 
             if seq_len > max_len:
                 index = torch.randint(0, seq_len - max_len, (1,), generator=self.generator).item()
-                sequence.append(seq[index:index+max_len])
+                seq_list.append(seq[index:index+max_len])
             else:
-                sequence.append(seq)
+                seq_list.append(seq)
 
-        tokenized = self.tokenizer(sequence,
+        tokenized = self.tokenizer(seq_list,
                         padding=True,
                         truncation=False, # We truncate the sequences beforehand
                         return_token_type_ids=False,
@@ -434,9 +435,9 @@ class BatchSampler(Sampler):
         )
         input_ids = tokenized['input_ids']
         attention_mask = tokenized['attention_mask'].to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
-        label = torch.tensor(label)
-        length = torch.tensor(length)
-        id = np.array(id).astype(np.string_)
+        label = torch.tensor(label_list)
+        length = torch.tensor(length_list)
+        id = np.array(id_list).astype(np.string_)
 
         return {
             'id': id, 
@@ -481,28 +482,46 @@ class BatchSampler(Sampler):
                 p.join()
             
             # Retrieve results in order
-            pool_lengths = [length for process_id in sorted(return_dict.keys()) for length in return_dict[process_id]]
+            pool_lenlists = [lenlist for process_id in sorted(return_dict.keys()) for lenlist in return_dict[process_id]]
 
-            # # old implementation
-            # pool_lengths = [self.dataset[i]['length'] for i in pool_indices]
-            sample_indices = [torch.randint(0, len(lenlist), (1,), generator=self.generator).item() for lenlist in pool_lengths]
-            # sample_indices = [random.randint(0, len(lenlist) - 1) for lenlist in pool_lengths] # New old implementation
-            pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
+            # # New implementation
+            lengths = torch.zeros((len(pool_indices),), dtype=torch.int64) # lengths of the sequences
+            sample_indices = -1 * torch.ones((len(pool_indices),), dtype=torch.int64) # the indices of the samples in the clusters
 
-            # Zip indices with sample indices and sort by length more efficiently
-            pool = list(zip(pool_lengths, pool_indices, sample_indices))
-            pool.sort(key=lambda x: x[0])
+            for i, lenlist in enumerate(pool_lenlists):
+                sample_randint = torch.randint(0, len(lenlist), (1,), generator=self.generator).item()
+                
+                # Set the lengths
+                lengths[i] = lenlist[sample_randint]
 
-            pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
+                # Set the indices
+                sample_indices[i] = sample_randint
+
+            # Sort the lengths
+            sorted_lengths, sorted_indices = torch.sort(lengths)
+
+            # Use the sorted indices to sort the pool_indices and sample_indices by the lengths retrieved
+            pool_sample_indices = torch.cat((pool_indices.unsqueeze(1), sample_indices.unsqueeze(1)), dim=1) # len(pool_indices) * (cluster_id, sample_id)
+            pool = pool_sample_indices[sorted_indices] # of shape (len(pool_indices), 2)
+
+            # # Old implementation
+            # sample_indices = [torch.randint(0, len(lenlist), (1,), generator=self.generator) for lenlist in pool_lengths]
+            # pool_lengths = [lenlist[index] for lenlist, index in zip(pool_lengths, sample_indices)] # list of lengths
+
+            # # Zip indices with sample indices and sort by length more efficiently
+            # pool = list(zip(pool_lengths, pool_indices, sample_indices))
+            # pool.sort(key=lambda x: x[0])
+
+            # pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
 
 
-            mega_batch_indices = torch.randperm((len(pool) // self.batch_size) + 1, generator=self.generator)
+            mega_batch_indices = torch.randperm((pool.shape[0] // self.batch_size) + 1, generator=self.generator)
             for j in mega_batch_indices:
-                if self.drop_last and j + self.batch_size > len(pool): # drop the last batch if it's too small
+                if self.drop_last and j + self.batch_size > pool.shape[0]: # drop the last batch if it's too small
                     continue
 
-                batch = pool[j:j+self.batch_size] # (pool_id, sample_id). First is the id of the cluster, second is the id of the sample in the cluster.
-                
+                batch = pool[j:j+self.batch_size].tolist() # (pool_id, sample_id). First is the id of the cluster, second is the id of the sample in the cluster.
+
                 yield batch
 
     def __len__(self):
@@ -1025,7 +1044,7 @@ class ProtDiffusionTrainer:
         model = self.ema.ema_model
         model.eval()
         dataloader = self.val_dataloader
-        if dataloader.batch_sampler.shuffle == False:
+        if dataloader.batch_sampler.shuffle == False: # TODO: there's a bug in the very first evaluation. All subsequent evaluations work fine when using shuffle=False.
             generator = torch.Generator(device=self.accelerator.device).manual_seed(self.config.seed)
         else:
             generator = None
@@ -1035,16 +1054,17 @@ class ProtDiffusionTrainer:
         running_loss = 0.0
 
         for step, batch in enumerate(dataloader):
-
             input_ids = batch['input_ids']
+            if step == 0:
+                print(input_ids[0])
             attention_mask = batch['attention_mask']
 
-            vae_encoded = self.vae.encode(x = input_ids,
+            vae_encoded: EncoderKLOutput1D = self.vae.encode(x = input_ids,
                                           attention_mask = attention_mask,
             )
 
             attention_mask = vae_encoded.attention_masks[-1]
-            latent = vae_encoded.latent_dist.sample() # Mode is deterministic TODO: .sample() or .mode()?
+            latent = vae_encoded.latent_dist.sample(generator=generator) # Mode is deterministic TODO: .sample() or .mode()?
             label = batch['label']
 
             # Sample noise to add to the images
@@ -1053,8 +1073,9 @@ class ProtDiffusionTrainer:
                 device=latent.device,
                 generator=generator,
             )
+
             if self.config.use_batch_optimal_transport:
-                noise = reorder_noise_for_OT(latent, noise)
+                noise = reorder_noise_for_OT(latent, noise, debug=True if step == 0 else False)
             
             noise = noise * attention_mask.unsqueeze(1) # Mask the noise
             bs = latent.shape[0]
@@ -1065,10 +1086,6 @@ class ProtDiffusionTrainer:
                 dtype=torch.int64,
                 generator=generator,
             )
-            if step == 0:
-                print(f"eval step 1 id: {str(batch['id'][0], encoding = 'utf-8')}")
-                print(f"eval step 1 noise: {noise[0][0][0]}")
-                print(f"eval step 1 timestep: {timesteps[0]}")
 
             # Add noise to the clean images according to the noise magnitude at each timestep
             noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
@@ -1226,8 +1243,6 @@ class ProtDiffusionTrainer:
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
-                if step == 0:
-                    print(f"training step 1 id: {str(batch['id'][0], encoding='utf-8')}")
 
                 input_ids = batch['input_ids']
                 attention_mask = batch['attention_mask']

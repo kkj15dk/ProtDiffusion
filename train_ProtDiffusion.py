@@ -13,7 +13,7 @@ import os
 
 config = ProtDiffusionTrainingConfig(
     num_epochs=100, # the number of epochs to train for
-    batch_size=16,
+    batch_size=6,
     mega_batch=50,
     gradient_accumulation_steps=16,
     learning_rate = 1e-5,
@@ -36,6 +36,7 @@ generator = torch.Generator().manual_seed(config.seed)
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
 dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
+dataset = dataset.with_format("numpy")
 train_dataset = dataset.shuffle(config.seed)
 
 # %%
@@ -69,7 +70,6 @@ train_dataloader = make_clustered_dataloader(config.batch_size,
                                              tokenizer=tokenizer,
                                              max_len=config.max_len_start,
                                              num_workers=num_workers,
-                                             generator=generator,
                                              seed=config.seed,
                                              shuffle=True,
 )
@@ -79,7 +79,6 @@ val_dataloader = make_clustered_dataloader(config.batch_size,
                                            tokenizer=tokenizer,
                                            max_len=config.max_len, 
                                            num_workers=1,
-                                           generator=generator,
                                            seed=config.seed,
                                            shuffle=False,
 )

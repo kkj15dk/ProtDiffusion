@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Sampler
 import torch.multiprocessing as mp
 from ema_pytorch import EMA
 
-from diffusers.optimization import get_cosine_schedule_with_warmup
+from diffusers.optimization import get_cosine_schedule_with_warmup, get_constant_schedule_with_warmup
 from diffusers.schedulers import KarrasDiffusionSchedulers
 from datasets import Dataset
 
@@ -804,7 +804,8 @@ class ProtDiffusionTrainingConfig:
     num_epochs: int = 1  # the number of epochs to train the model
     gradient_accumulation_steps: int = 2  # the number of steps to accumulate gradients before taking an optimizer step
     learning_rate: float = 1e-4  # the learning rate
-    lr_warmup_steps:int  = 1000
+    lr_warmup_steps: int  = 1000
+    lr_schedule: str = 'cosine'
     save_image_model_steps:int  = 1000
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision #TODO: implement fully
     optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`
@@ -827,7 +828,7 @@ class ProtDiffusionTrainingConfig:
     total_checkpoints_limit: int = 5  # the total limit of checkpoints to save
 
     cutoff: Optional[float] = None # cutoff for when to predict the token given the logits, and when to assign the unknown token 'X' to this position
-    skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
+    skip_special_tokens: bool = False # whether to skip the special tokens when writing the evaluation sequences
 
     gradient_clip_val: Optional[float] = 5.0  # the value to clip the gradients to
     weight_decay: float = 0.01 # weight decay for the optimizer
@@ -905,11 +906,19 @@ class ProtDiffusionTrainer:
         else:
             raise ValueError("Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`")
 
-        lr_scheduler = get_cosine_schedule_with_warmup(
-            optimizer=optimizer,
-            num_warmup_steps=config.lr_warmup_steps,
-            num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
-        )
+        if config.lr_schedule == 'constant':
+            lr_scheduler = get_constant_schedule_with_warmup(
+                optimizer=optimizer,
+                num_warmup_steps=config.lr_warmup_steps,
+            )
+        elif config.lr_schedule == 'cosine':
+            lr_scheduler = get_cosine_schedule_with_warmup(
+                optimizer=optimizer,
+                num_warmup_steps=config.lr_warmup_steps,
+                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+            )
+        else:
+            raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')
         # Prepare everything
         # There is no specific order to remember, you just need to unpack the
         # objects in the same order you gave them to the prepare method.
@@ -980,7 +989,7 @@ class ProtDiffusionTrainer:
                         args=(
                             probs, 
                             name, 
-                            f"{test_dir}/{name}_length_{logoplot_sample_len}_class_label_{logoplot_sample_cl}.png", 
+                            f"{test_dir}/{name}_length_{logoplot_sample_len}_class_label_{logoplot_sample_cl}_inference_steps_{self.eval_num_inference_steps}.png", 
                             self.tokenizer.decode(range(self.tokenizer.vocab_size)),
                         ),
                         error_callback=lambda e: print(e),
@@ -1074,7 +1083,7 @@ class ProtDiffusionTrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable=True) #not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):

@@ -7,7 +7,7 @@ import torch.multiprocessing as mp
 from ema_pytorch import EMA
 
 from diffusers.optimization import get_cosine_schedule_with_warmup
-from diffusers.schedulers import KarrasDiffusionSchedulers
+from diffusers.schedulers import DDPMScheduler
 from datasets import Dataset
 
 import os
@@ -34,8 +34,9 @@ import ot
 
 from .models.autoencoder_kl_1d import AutoencoderKL1D
 from .models.vae import EncoderKLOutput1D
-from .models.dit_transformer_1d import DiTTransformer1DModel
+from .models.dit_transformer_1d import DiTTransformer1DModel, Transformer1DModelOutput
 from .models.pipeline_protein import ProtDiffusionPipeline, logits_to_token_ids
+from .schedulers.FlowMatchingEulerScheduler import FlowMatchingEulerScheduler
 from .visualization_utils import make_logoplot
 
 # Set a random seed in a bunch of different places
@@ -358,7 +359,10 @@ class BatchSampler(Sampler):
         self.dataset = dataset
         self.num_workers = num_workers
         self.seed = seed
-        self.generator = torch.Generator().manual_seed(seed)
+        if shuffle:
+            self.generator = torch.Generator().manual_seed(seed)
+        else:
+            self.generator = None
         self.shuffle = shuffle
 
     def process_sequence(self,
@@ -953,18 +957,26 @@ class ProtDiffusionTrainer:
                  vae: AutoencoderKL1D, 
                  tokenizer: PreTrainedTokenizerFast, 
                  config: ProtDiffusionTrainingConfig, 
+                 noise_scheduler: Union[DDPMScheduler, FlowMatchingEulerScheduler], # the scheduler to use for the diffusion
                  train_dataloader: DataLoader, 
                  val_dataloader: Optional[DataLoader] = None, 
                  test_dataloader: Optional[DataLoader] = None,
                  training_variables: Optional[TrainingVariables] = None,
-
-                 noise_scheduler: KarrasDiffusionSchedulers = None, # the scheduler to use for the diffusion
                  eval_seq_len: Union[List[int],int] = 1024, # the sequence lengths to evaluate on
                  eval_class_labels: Optional[Union[List[int],int]] = None, # the class labels to evaluate on, should be a list the same length as the eval batch size
                  eval_guidance_scale: float = 2.0, # the scale of the guidance for the diffusion
                  eval_num_inference_steps: int = 1000, # the number of inference steps for the diffusion
         ):
         self.noise_scheduler = noise_scheduler
+        assert isinstance(noise_scheduler, (DDPMScheduler, FlowMatchingEulerScheduler)), "The noise scheduler must be an instance of KarrasDiffusionSchedulers or FlowMatchingEulerScheduler"
+        # Figure out if we are doing flow (matching) or diffusion
+        if isinstance(noise_scheduler, DDPMScheduler):
+            self.flow = False
+            self.diffusion = True
+        elif isinstance(noise_scheduler, FlowMatchingEulerScheduler):
+            self.flow = True
+            self.diffusion = False
+
         self.eval_seq_len = eval_seq_len
         self.eval_class_labels = eval_class_labels
         self.eval_guidance_scale = eval_guidance_scale
@@ -1040,8 +1052,47 @@ class ProtDiffusionTrainer:
             if p.requires_grad and p.grad is not None:
                 p.grad.data = p.grad.data / n_tokens
 
+    def get_timesteps(self, bs: int, generator: Optional[torch.Generator] = None) -> torch.Tensor:
+        
+        '''
+        Get the timesteps for the diffusion or flow matching training.
+        bs: int, the batch size
+        generator: torch.Generator, the random number generator
+        '''
+
+        if self.diffusion and not self.flow: # Diffusion
+            timesteps = torch.randint(
+                    0, self.noise_scheduler.config.num_train_timesteps, (bs,), device=self.accelerator.device,
+                    dtype=torch.int64,
+                    generator=generator,
+            )
+        elif self.flow and not self.diffusion: # Flow matching
+            timesteps = torch.randint(
+                    0, 1, (bs,), device=self.accelerator.device,
+                    dtype=torch.int64,
+                    generator=generator,
+            )
+        return timesteps
+
+    def loss(self,
+             output: Transformer1DModelOutput,
+             latent: Optional[torch.Tensor],
+             noise: torch.Tensor,
+             attention_mask: torch.Tensor,
+    ):
+        if self.diffusion and not self.flow: # Diffusion
+            target = noise
+        elif self.flow and not self.diffusion: # Flow matching
+            target = latent - noise
+        else:
+            raise ValueError("Either diffusion or flow must be True, and the other False")
+        loss = F.mse_loss(output, target, reduction='none').mean(dim=1) * attention_mask # Mean over the channel dimension, Mask the loss
+        loss = loss.sum() / attention_mask.sum() # Average the loss over the non-masked tokens
+
+        return loss
+
     def evaluate(self):
-        model = self.ema.ema_model
+        model: DiTTransformer1DModel = self.ema.ema_model
         model.eval()
         dataloader = self.val_dataloader
         if dataloader.batch_sampler.shuffle == False: # TODO: there's a bug in the very first evaluation. All subsequent evaluations work fine when using shuffle=False.
@@ -1057,10 +1108,11 @@ class ProtDiffusionTrainer:
             input_ids = batch['input_ids']
             # if step == 0:
             #     print(input_ids[0])
+            #     print(batch['id'][0])
             attention_mask = batch['attention_mask']
 
             vae_encoded: EncoderKLOutput1D = self.vae.encode(x = input_ids,
-                                          attention_mask = attention_mask,
+                                                             attention_mask = attention_mask,
             )
 
             attention_mask = vae_encoded.attention_masks[-1]
@@ -1070,7 +1122,7 @@ class ProtDiffusionTrainer:
             # Sample noise to add to the images
             noise = torch.randn(
                 latent.shape, 
-                device=latent.device,
+                device=self.accelerator.device,
                 generator=generator,
             )
 
@@ -1080,28 +1132,23 @@ class ProtDiffusionTrainer:
             noise = noise * attention_mask.unsqueeze(1) # Mask the noise
             bs = latent.shape[0]
 
-            # Sample a random timestep for each image
-            timesteps = torch.randint(
-                0, self.noise_scheduler.config.num_train_timesteps, (bs,), device=latent.device,
-                dtype=torch.int64,
-                generator=generator,
-            )
+            # Sample a random timestep for each latent
+            timesteps = self.get_timesteps(bs, generator)
 
             # Add noise to the clean images according to the noise magnitude at each timestep
-            noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
-            input = noisy_latent.to(self.accelerator.device)
+            noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps) # Same method for both diffusion and flow matching
+            noisy_latent = noisy_latent.to(self.accelerator.device)
             attention_mask = attention_mask.to(self.accelerator.device)
 
             # Forward pass
-            output = model(hidden_states = input,
+            output = model(hidden_states = noisy_latent,
                            attention_mask = attention_mask,
                            timestep = timesteps,
                            class_labels = label,
             ).sample
             
             # Loss calculation
-            loss = F.mse_loss(output, noise, reduction='none').mean(dim=1) * attention_mask # Mean over the channel dimension, Mask the loss
-            loss = loss.sum() / attention_mask.sum() # Average the loss over the non-masked tokens
+            loss = self.loss(output, latent, noise, attention_mask)
 
             # Log the progress
             running_loss += loss.item()
@@ -1115,7 +1162,7 @@ class ProtDiffusionTrainer:
 
     @torch.no_grad()
     def inference_test(self,
-                 pipeline: ProtDiffusionPipeline,
+                       pipeline: ProtDiffusionPipeline,
     ) -> dict:
         test_dir = os.path.join(self.config.output_dir, "samples")
         os.makedirs(test_dir, exist_ok=True)
@@ -1259,37 +1306,32 @@ class ProtDiffusionTrainer:
                 noise = torch.randn(latent.shape, device=latent.device)
                 if self.config.use_batch_optimal_transport:
                     noise = reorder_noise_for_OT(latent, noise)
+                
                 noise = noise * attention_mask.unsqueeze(1) # Mask the noise
                 bs = latent.shape[0]
 
-                # Sample a random timestep for each image
-                timesteps = torch.randint(
-                    0, self.noise_scheduler.config.num_train_timesteps, (bs,), device=latent.device,
-                    dtype=torch.int64
-                )
+                # Sample a random timestep for each latent
+                timesteps = self.get_timesteps(bs)
 
                 # Add noise to the clean images according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
                 noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
-                # noisy_latent = self.noise_scheduler.scale_model_input(noisy_latent, timesteps) # TODO: Find out if this is necessary
 
                 # Gradient accumulation
                 with self.accelerator.accumulate(self.transformer):
-                    input = noisy_latent.to(self.accelerator.device)
+                    noisy_latent = noisy_latent.to(self.accelerator.device)
                     attention_mask = attention_mask.to(self.accelerator.device)
 
                     n_tokens += attention_mask.sum()
 
                     # Forward pass
-                    output = self.transformer(hidden_states = input,
+                    output = self.transformer(hidden_states = noisy_latent,
                                               attention_mask = attention_mask,
                                               timestep = timesteps,
                                               class_labels = label,
                     ).sample
                     
                     # Loss calculation
-                    loss = F.mse_loss(output, noise, reduction='none').mean(dim=1) * attention_mask # Mean over the channel dimension, Mask the loss
-                    loss = loss.sum() / attention_mask.sum() # Average the loss over the non-masked tokens
+                    loss = self.loss(output, latent, noise, attention_mask)
                     loss_back = loss * attention_mask.sum() # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
 
                     # Backward pass

@@ -1,26 +1,27 @@
 # %%
-from ProtDiffusion.training_utils import ProtDiffusionTrainingConfig, make_clustered_dataloader, set_seed, ProtDiffusionTrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 from diffusers import DDPMScheduler
 import torch
 
 from datasets import load_from_disk
 
+from ProtDiffusion.training_utils import ProtDiffusionTrainingConfig, make_clustered_dataloader, set_seed, ProtDiffusionTrainer, count_parameters
 from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
 from ProtDiffusion.models.dit_transformer_1d import DiTTransformer1DModel
+from ProtDiffusion.schedulers.FlowMatchingEulerScheduler import FlowMatchingEulerScheduler
 
 import os
 
 config = ProtDiffusionTrainingConfig(
-    num_epochs=3000, # the number of epochs to train for
+    num_epochs=100, # the number of epochs to train for
     batch_size=16,
     mega_batch=50,
     gradient_accumulation_steps=2,
     learning_rate = 1e-5,
-    lr_warmup_steps = 200,
+    lr_warmup_steps = 100,
     save_image_model_steps = 320,
     save_every_epoch = True,
-    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v1.8"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-UniRef50-test_v2.1-flow-scale1000v2"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=4096, # 512 * 2**6
@@ -105,7 +106,8 @@ transformer = DiTTransformer1DModel(
 count_parameters(transformer) # Count the parameters of the model and print
 
 # %%
-noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
+# noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
+noise_scheduler = FlowMatchingEulerScheduler(num_inference_steps=100)
 
 Trainer = ProtDiffusionTrainer(transformer=transformer,
                                vae=vae,

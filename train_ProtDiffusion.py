@@ -30,13 +30,15 @@ config = ProtDiffusionTrainingConfig(
     ema_decay=0.9999,
     ema_update_after=100,
     ema_update_every=10,
-    use_batch_optimal_transport=True,
+    use_batch_optimal_transport=True, #False
 )
+print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 generator = torch.Generator().manual_seed(config.seed)
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
+# dataset = load_from_disk('/work3/s204514/PKSs_grouped')
+dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 train_dataset = dataset.shuffle(config.seed)
 
 # %%
@@ -59,6 +61,12 @@ test_dataset = val_test_split['test']
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
 
+# shuffle again for 1.1
+train_dataset = dataset.shuffle(config.seed + 1)
+
+# Get pretrained models
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
@@ -117,12 +125,12 @@ Trainer = ProtDiffusionTrainer(transformer=transformer,
                                val_dataloader=val_dataloader,
                                test_dataloader=None,
                                noise_scheduler = noise_scheduler, # the scheduler to use for the diffusion
-                               eval_seq_len = [4096, 4096, 1024, 1024], # the sequence lengths to evaluate on
+                               eval_seq_len = [2048, 2048, 1024, 1024], # the sequence lengths to evaluate on
                                eval_class_labels = [0,1,0,1], # the class labels to evaluate on, should be a list the same length as the eval batch size
                                eval_guidance_scale = 4.0, # the scale of the guidance for the diffusion
-                               eval_num_inference_steps = 5, # the number of inference steps for the diffusion
+                               eval_num_inference_steps = 1000, # the number of inference steps for the diffusion
 )
 
 # %%
 if __name__ == '__main__':
-    Trainer.train()
+    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/ProtDiffusion-UniRef50_v1.1/checkpoints/checkpoint_4')

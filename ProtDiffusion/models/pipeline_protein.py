@@ -23,11 +23,19 @@ from dataclasses import dataclass
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, BaseOutput
 from diffusers.schedulers import KarrasDiffusionSchedulers
+from diffusers import DDPMScheduler
+
 
 from transformers import PreTrainedTokenizerFast
 
 from .dit_transformer_1d import DiTTransformer1DModel
 from .autoencoder_kl_1d import AutoencoderKL1D
+
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+from Bio import SeqIO
+
+import os
 
 @dataclass
 class ProteinPipelineOutput(BaseOutput):
@@ -53,7 +61,7 @@ def logits_to_token_ids(logits: torch.Tensor, tokenizer: PreTrainedTokenizerFast
     else:
         token_ids = torch.where(probs.max(dim=-2).values > cutoff, 
                                 probs.argmax(dim=-2), 
-                                torch.tensor([tokenizer.unknown_token_id]) # TODO: fix with no unknown_token_id in tokenizer
+                                torch.tensor([tokenizer.unk_token_id]) # TODO: fix with no unknown_token_id in tokenizer
                                 )
     return token_ids
 

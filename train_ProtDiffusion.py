@@ -1,7 +1,8 @@
 # %%
-from ProtDiffusion.training_utils import ProtDiffusionTrainingConfig, make_dataloader, set_seed, ProtDiffusionTrainer, count_parameters
+from ProtDiffusion.training_utils import ProtDiffusionTrainingConfig, make_clustered_dataloader, set_seed, ProtDiffusionTrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 from diffusers import DDPMScheduler
+import torch
 
 from datasets import load_from_disk
 
@@ -32,11 +33,31 @@ config = ProtDiffusionTrainingConfig(
 )
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
+generator = torch.Generator().manual_seed(config.seed)
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
 # dataset = load_from_disk('/work3/s204514/PKSs_grouped')
 dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 train_dataset = dataset.shuffle(config.seed)
+
+# %%
+# Get pretrained models
+vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+
+# Split the dataset into train and temp sets using the datasets library
+train_test_split_ratio = 0.2
+train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
+train_dataset = train_val_test_split['train']
+temp_dataset = train_val_test_split['test']
+
+# Split the temp set into validation and test sets using the datasets library
+val_test_split_ratio = 0.5
+val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
+val_dataset = val_test_split['train']
+test_dataset = val_test_split['test']
+
+# Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
 
 # shuffle again for 1.1
@@ -49,14 +70,28 @@ vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
 num_workers = 16
-train_dataloader = make_dataloader(config, 
-                                   train_dataset,
-                                   tokenizer=tokenizer,
-                                   max_len=config.max_len_start,
-                                   num_workers=num_workers,
-                                   drop_last=True, # False
+
+train_dataloader = make_clustered_dataloader(config.batch_size,
+                                             config.mega_batch,
+                                             train_dataset,
+                                             tokenizer=tokenizer,
+                                             max_len=config.max_len_start,
+                                             num_workers=num_workers,
+                                             seed=config.seed,
+                                             shuffle=True,
 )
+val_dataloader = make_clustered_dataloader(config.batch_size,
+                                           config.mega_batch,
+                                           val_dataset, 
+                                           tokenizer=tokenizer,
+                                           max_len=config.max_len, 
+                                           num_workers=1,
+                                           seed=config.seed,
+                                           shuffle=False,
+)
+
 print("length of train dataloader: ", len(train_dataloader))
+print("length of val dataloader: ", len(val_dataloader))
 
 # %%
 transformer = DiTTransformer1DModel(
@@ -83,10 +118,10 @@ noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
 Trainer = ProtDiffusionTrainer(transformer=transformer,
                                vae=vae,
                                tokenizer=tokenizer,
-                               train_dataloader=train_dataloader,
-                               val_dataloader=None,
-                               test_dataloader=None,
                                config=config,
+                               train_dataloader=train_dataloader,
+                               val_dataloader=val_dataloader,
+                               test_dataloader=None,
                                noise_scheduler = noise_scheduler, # the scheduler to use for the diffusion
                                eval_seq_len = [2048, 2048, 1024, 1024], # the sequence lengths to evaluate on
                                eval_class_labels = [0,1,0,1], # the class labels to evaluate on, should be a list the same length as the eval batch size

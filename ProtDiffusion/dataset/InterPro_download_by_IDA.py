@@ -6,9 +6,11 @@ from urllib import request
 from urllib.error import HTTPError
 from time import sleep
 
-# Script to download all PKSs with a specific InterPro domain architecture (IDA) (with KS, AT and ACP. Without Adenylation domain, ABC transporter, choline acyltransferase, aminotransferase, PKS docking domain, NMO, or condensation domains) from InterPro.
+# # Script to download all PKSs with a specific InterPro domain architecture (IDA) (with KS, AT and ACP. Without Adenylation domain, ABC transporter, choline acyltransferase, aminotransferase, PKS docking domain, NMO, or condensation domains) from InterPro.
+# IDA_API_URL = "https://www.ebi.ac.uk/interpro/api/entry/?ida_search=IPR014031%2CIPR014030%2CIPR014043%2CIPR009081&ida_ignore=IPR000873%2CPF00005%2CIPR039551%2CIPR004839%2CIPR015083%2CIPR004136%2CIPR001242"
 
-IDA_API_URL = "https://www.ebi.ac.uk/interpro/api/entry/?ida_search=IPR014031%2CIPR014030%2CIPR014043%2CIPR009081&ida_ignore=IPR000873%2CPF00005%2CIPR039551%2CIPR004839%2CIPR015083%2CIPR004136%2CIPR001242"
+# phosphopantehteine attachment, ACP
+IDA_API_URL = "https://www.ebi.ac.uk/interpro/api/entry/?ida_search=IPR009081"
 
 BASE_URL_EUK = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2/?ida=" # Prokaryotic
 BASE_URL_PRO = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2759/?ida=" # Eukaryotic
@@ -16,8 +18,8 @@ BASE_URL_PRO = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/u
 URL_EXTENSION = "&page_size=200&extra_fields=sequence"
 
 
-IDA_FILE = "IDA_IDs.txt"
-OUTPUT_FILE = "PKSs.csv"
+IDA_FILE = "ACP_IDA_IDs.txt"
+OUTPUT_FILE = "ACP.csv"
 
 def get_ida_ids():
   output_handle = open(IDA_FILE, "w")

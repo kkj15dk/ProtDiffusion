@@ -14,7 +14,7 @@ import os
 
 config = ProtDiffusionTrainingConfig(
     num_epochs=1000, # the number of epochs to train for
-    batch_size=16,
+    batch_size=32,
     mega_batch=10,
     gradient_accumulation_steps=2,
     learning_rate = 1e-5,
@@ -38,25 +38,26 @@ print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 generator = torch.Generator().manual_seed(config.seed)
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/ACP_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/PKSs_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
+dataset = load_from_disk('/work3/s204514/ACP_grouped')
 # dataset = load_from_disk('/work3/s204514/PKSs_grouped')
 # dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 train_dataset = dataset.shuffle(config.seed)
 
 # %%
-# Get pretrained models
-vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # # Get pretrained models
-# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
-# vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/pretrained/EMA')
+# vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+# Get pretrained models
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.1
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
+# temp_dataset = train_val_test_split['test']
 val_dataset = train_val_test_split['test']
 
 # # Split the temp set into validation and test sets using the datasets library

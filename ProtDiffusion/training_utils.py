@@ -307,7 +307,7 @@ class ClusteredDataset(Dataset):
 
         data = self.dataset[clusterindex]
 
-        id = data[self.id_key].astype(np.string_)
+        id = data[self.id_key].astype(np.bytes_)
         length = []
         label = []
         sequence = []
@@ -441,7 +441,7 @@ class BatchSampler(Sampler):
         attention_mask = tokenized['attention_mask'].to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
         label = torch.tensor(label_list)
         length = torch.tensor(length_list)
-        id = np.array(id_list).astype(np.string_)
+        id = np.array(id_list).astype(np.bytes_)
 
         return {
             'id': id, 

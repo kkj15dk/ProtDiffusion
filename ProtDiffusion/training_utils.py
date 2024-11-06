@@ -307,7 +307,7 @@ class ClusteredDataset(Dataset):
 
         data = self.dataset[clusterindex]
 
-        id = data[self.id_key].astype(np.string_)
+        id = data[self.id_key]
         length = []
         label = []
         sequence = []
@@ -317,10 +317,6 @@ class ClusteredDataset(Dataset):
             length.append(data[self.length_key][i][sampleindex_i])
             label.append(data[self.label_key][i][sampleindex_i])
             sequence.append(data[self.sequence_key][i][sampleindex_i])
-        
-        length = np.array(length)
-        label = np.array(label)
-        sequence = np.array(sequence)
 
         out = {'id': id, 'length': length, 'label': label, 'sequence': sequence}
 
@@ -412,7 +408,8 @@ class BatchSampler(Sampler):
 
         for i, item in enumerate(batch):
             # id
-            id = str(item[self.id_key], encoding = 'utf-8')
+            id = item[self.id_key]
+            # id = str(id, encoding = 'utf-8')
             id_list.append(id)
 
             # label
@@ -420,7 +417,7 @@ class BatchSampler(Sampler):
 
             # sequence
             seq = item[self.sequence_key]
-            seq = str(seq, encoding='utf-8')
+            # seq = str(seq, encoding='utf-8')
             seq = self.process_sequence(seq)
             seq_len = item[self.length_key]
 
@@ -441,7 +438,10 @@ class BatchSampler(Sampler):
         attention_mask = tokenized['attention_mask'].to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
         label = torch.tensor(label_list)
         length = torch.tensor(length_list)
-        id = np.array(id_list).astype(np.string_)
+        id = np.array(id_list).astype(np.bytes_)
+        # label = label_list
+        # length = length_list
+        # id = id_list
 
         return {
             'id': id, 
@@ -703,7 +703,8 @@ class VAETrainer:
             seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
             # Save all samples as a FASTA file
-            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i], encoding='utf-8'), 
+            # seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i], encoding='utf-8'), 
+            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
                             description=
                             f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.3f}")
                             for i, seq in enumerate(seqs_pred)]

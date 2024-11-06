@@ -639,7 +639,7 @@ class VAETrainer:
         latent_data = []
         name = f"step_{self.training_variables.global_step//1:08d}"
 
-        progress_bar = tqdm(total=len(self.val_dataloader), disable=True) #not self.accelerator.is_local_main_process)
+        progress_bar = tqdm(total=len(self.val_dataloader), disable = not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Evaluating {name}")
 
         for i, batch in enumerate(self.val_dataloader):
@@ -792,7 +792,7 @@ class VAETrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable=True) #not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable = not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
@@ -901,7 +901,8 @@ class ProtDiffusionTrainingConfig:
     learning_rate: float = 1e-4  # the learning rate
     lr_warmup_steps: int  = 1000
     lr_schedule: str = 'cosine'
-    save_image_model_steps:int  = 1000
+    save_image_model_steps: int  = 1000
+    save_every_epoch: bool = False  # whether to save the model every epoch
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision #TODO: implement fully
     optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`
     SGDmomentum: Optional[float] = 0.9
@@ -932,6 +933,9 @@ class ProtDiffusionTrainingConfig:
     ema_update_every: int = 1 # the number of steps to wait before updating the EMA
 
     use_batch_optimal_transport: bool = True # whether to use optimal transport for the batch to reorder the noise
+    use_logitnorm_timestep_sampling: bool = True # whether to use the logitnorm sampling for the timestep
+    logitnorm_m: float = 0 # the m parameter for the logitnorm sampling
+    logitnorm_s: float = 1 # the s parameter for the logitnorm sampling
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -1060,6 +1064,14 @@ class ProtDiffusionTrainer:
             if p.requires_grad and p.grad is not None:
                 p.grad.data = p.grad.data / n_tokens
 
+    def logitnorm(self, bs: int, m: int, s: int, generator: Optional[torch.Generator] = None) -> torch.Tensor:
+        '''
+        draw random samples from a logitnormal distribution. https://arxiv.org/pdf/2403.03206
+        '''
+        rand = torch.rand((bs,), device=self.accelerator.device, generator=generator)
+        samples = (1 / (s * torch.sqrt(torch.tensor(2 * torch.pi)))) * ( 1 / (rand * (1 - rand))) * torch.exp(-0.5 * ((torch.log(rand / (1 - rand)) - m) / s) ** 2)
+        return samples
+
     def get_timesteps(self, bs: int, generator: Optional[torch.Generator] = None) -> torch.Tensor:
         
         '''
@@ -1069,17 +1081,23 @@ class ProtDiffusionTrainer:
         '''
 
         if self.diffusion and not self.flow: # Diffusion
+            if self.config.use_logitnorm_timestep_sampling:
+                raise NotImplementedError("Logitnorm timestep sampling is not implemented with diffusion")
             timesteps = torch.randint(
                     0, self.noise_scheduler.config.num_train_timesteps, (bs,), device=self.accelerator.device,
                     dtype=torch.int64,
                     generator=generator,
             )
         elif self.flow and not self.diffusion: # Flow matching
-            timesteps = torch.randint(
-                    0, 1, (bs,), device=self.accelerator.device,
-                    dtype=torch.int64,
-                    generator=generator,
-            )
+            if self.config.use_logitnorm_timestep_sampling:
+                timesteps = self.logitnorm(bs, self.config.logitnorm_m, self.config.logitnorm_s, generator)
+            else:
+                timesteps = torch.rand(
+                        (bs,), 
+                        device=self.accelerator.device,
+                        dtype=torch.float32,
+                        generator=generator,
+                )
         return timesteps
 
     def loss(self,
@@ -1140,8 +1158,13 @@ class ProtDiffusionTrainer:
             noise = noise * attention_mask.unsqueeze(1) # Mask the noise
             bs = latent.shape[0]
 
-            # Sample a random timestep for each latent
-            timesteps = self.get_timesteps(bs, generator)
+            # Sample a random timestep for each latent. Make sure it is from a uniform distribution for evaluation.
+            timesteps = torch.rand(
+                        (bs,), 
+                        device=self.accelerator.device,
+                        dtype=torch.float32,
+                        generator=generator,
+            )
 
             # Add noise to the clean images according to the noise magnitude at each timestep
             noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps) # Same method for both diffusion and flow matching
@@ -1171,7 +1194,7 @@ class ProtDiffusionTrainer:
     @torch.no_grad()
     def inference_test(self,
                        pipeline: ProtDiffusionPipeline,
-    ) -> dict:
+    ):
         test_dir = os.path.join(self.config.output_dir, "samples")
         os.makedirs(test_dir, exist_ok=True)
 
@@ -1184,36 +1207,37 @@ class ProtDiffusionTrainer:
                           guidance_scale=self.eval_guidance_scale,
                           num_inference_steps=self.eval_num_inference_steps,
                           generator=None,
-                          output_type='logits',
+                          output_type='aa_seq',
         )
-        logits = output.seqs
+        # logits = output.seqs
+        seqs_pred = output.seqs
 
-        # make a logoplot of the first sample
-        logoplot_sample = logits[0]
-        # remove the padding
-        logoplot_sample_len = seqs_lens[0]
-        logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
-        logoplot_sample_cl = class_labels[0]
-        probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
-        pool = mp.Pool(1)
-        pool.apply_async(make_logoplot, 
-                        args=(
-                            probs, 
-                            name, 
-                            f"{test_dir}/{name}_length_{logoplot_sample_len}_class_label_{logoplot_sample_cl}_inference_steps_{self.eval_num_inference_steps}.png", 
-                            self.tokenizer.decode(range(self.tokenizer.vocab_size)),
-                        ),
-                        error_callback=lambda e: print(e),
-                        callback=lambda _: pool.close(),
-        )
-        # gc.collect()
+        # # make a logoplot of the first sample
+        # logoplot_sample = logits[0]
+        # # remove the padding
+        # logoplot_sample_len = seqs_lens[0]
+        # logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
+        # logoplot_sample_cl = class_labels[0]
+        # probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
+        # pool = mp.Pool(1)
+        # pool.apply_async(make_logoplot, 
+        #                 args=(
+        #                     probs, 
+        #                     name, 
+        #                     f"{test_dir}/{name}_length_{logoplot_sample_len}_class_label_{logoplot_sample_cl}_inference_steps_{self.eval_num_inference_steps}.png", 
+        #                     self.tokenizer.decode(range(self.tokenizer.vocab_size)),
+        #                 ),
+        #                 error_callback=lambda e: print(e),
+        #                 callback=lambda _: pool.close(),
+        # )
+        # # gc.collect()
 
-        token_ids_pred = logits_to_token_ids(logits, self.tokenizer, cutoff=self.config.cutoff)
+        # token_ids_pred = logits_to_token_ids(logits, self.tokenizer, cutoff=self.config.cutoff)
 
-        # Decode the predicted sequences, and remove zero padding
-        seqs_pred = self.tokenizer.batch_decode(token_ids_pred, skip_special_tokens=self.config.skip_special_tokens)
+        # # Decode the predicted sequences, and remove zero padding
+        # seqs_pred = self.tokenizer.batch_decode(token_ids_pred, skip_special_tokens=self.config.skip_special_tokens)
 
-        # Remove the padding from the sequences
+        # # Remove the padding from the sequences
         # seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
         # Save all samples as a FASTA file
@@ -1294,7 +1318,7 @@ class ProtDiffusionTrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable=True) #not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable = not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
@@ -1396,12 +1420,13 @@ class ProtDiffusionTrainer:
             torch.cuda.empty_cache()
             if self.config.save_every_epoch:
 
-            #### My RAM gats eaten somewhere here
-                # # Test of inference
-                # self.accelerator.wait_for_everyone()
-                # pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
-                # self.inference_test(pipeline)
-            #### My RAM gats eaten somewhere here
+            ### My RAM gats eaten somewhere here
+                # Test of inference
+                self.accelerator.wait_for_everyone()
+                if self.accelerator.is_main_process:
+                    pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                    self.inference_test(pipeline)
+            ### My RAM gats eaten somewhere here
 
                 # Evaluation
                 self.accelerator.wait_for_everyone()

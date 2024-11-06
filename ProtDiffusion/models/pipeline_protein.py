@@ -30,6 +30,7 @@ from transformers import PreTrainedTokenizerFast
 
 from .dit_transformer_1d import DiTTransformer1DModel
 from .autoencoder_kl_1d import AutoencoderKL1D
+from ..schedulers.FlowMatchingEulerScheduler import FlowMatchingEulerScheduler
 
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
@@ -84,12 +85,12 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             The tokenizer to be used for decoding the sequences into input_ids.
     """
 
-    model_cpu_offload_seq = "transformer->unet"
+    model_cpu_offload_seq = "transformer->vae"
 
     def __init__(self,
                  transformer: DiTTransformer1DModel, 
                  vae: AutoencoderKL1D,
-                 scheduler: KarrasDiffusionSchedulers,
+                 scheduler: Union[DDPMScheduler, FlowMatchingEulerScheduler],
                  tokenizer: PreTrainedTokenizerFast,
     ):
         super().__init__()

@@ -9,7 +9,6 @@ from torch import Tensor
 def get_time_coefficients(timesteps: torch.Tensor, ndim: int) -> torch.Tensor:
     return timesteps.reshape((timesteps.shape[0], *([1] * (ndim - 1))))
 
-
 class FlowMatchingEulerSchedulerOutput:
     """
     Output class for the scheduler's `step` function output.
@@ -25,10 +24,10 @@ class FlowMatchingEulerSchedulerOutput:
             1 / num_inference_steps coefficient, used to scale model prediction in Euler Method
     """
 
-    def __init__(self, model_output, sample, timesteps, h):
+    def __init__(self, model_output, sample, timestep, h):
         self.model_output = model_output
         self.sample = sample
-        self.timesteps = timesteps
+        self.timestep = timestep
         self.h = h
 
         self.ps = None
@@ -44,8 +43,7 @@ class FlowMatchingEulerSchedulerOutput:
     @property
     def pred_original_sample(self) -> torch.Tensor:
         if self.pos is None:
-            self.pos = self.sample + (
-                        1 - get_time_coefficients(self.timesteps, self.model_output.ndim)) * self.model_output
+            self.pos = self.sample + (1 - self.timestep) * self.model_output
 
         return self.pos
 
@@ -100,7 +98,11 @@ class FlowMatchingEulerScheduler:
         self.h = 1 / num_inference_steps
         self.timesteps = torch.arange(0, 1, self.h)
 
-    def step(self, model_output: torch.Tensor, timesteps: torch.Tensor, sample: torch.Tensor,
+    def step(self, 
+             model_output: torch.Tensor, 
+             timestep: int, 
+             sample: torch.Tensor, 
+             generator: Optional[torch.Generator] = None,
              return_dict: bool = True) -> FlowMatchingEulerSchedulerOutput | tuple[Tensor]:
         """
         Predict the sample from the previous timestep by reversing the SDE. This function propagates the diffusion
@@ -122,7 +124,7 @@ class FlowMatchingEulerScheduler:
                 tuple is returned where the first element is the sample tensor.
 
         """
-        step = FlowMatchingEulerSchedulerOutput(model_output=model_output, sample=sample, timesteps=timesteps, h=self.h)
+        step = FlowMatchingEulerSchedulerOutput(model_output=model_output, sample=sample, timestep=timestep, h=self.h)
 
         if return_dict:
             return step

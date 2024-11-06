@@ -13,15 +13,16 @@ from ProtDiffusion.schedulers.FlowMatchingEulerScheduler import FlowMatchingEule
 import os
 
 config = ProtDiffusionTrainingConfig(
-    num_epochs=100, # the number of epochs to train for
+    num_epochs=1000, # the number of epochs to train for
     batch_size=16,
-    mega_batch=50,
+    mega_batch=10,
     gradient_accumulation_steps=2,
     learning_rate = 1e-5,
-    lr_warmup_steps = 100,
+    lr_warmup_steps = 300,
+    lr_schedule = 'constant', # 'constant', 'cosine'
     save_image_model_steps = 320,
     save_every_epoch = True,
-    output_dir=os.path.join("output","ProtDiffusion-UniRef50-test_v2.1-flow-scale1000v2"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v2.4-flow-logitnorm"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=4096, # 512 * 2**6
@@ -36,15 +37,19 @@ print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 generator = torch.Generator().manual_seed(config.seed)
 
-# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped-test')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/PKSs_grouped')
+# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
 # dataset = load_from_disk('/work3/s204514/PKSs_grouped')
-dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
+# dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 train_dataset = dataset.shuffle(config.seed)
 
 # %%
 # Get pretrained models
 vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+# # Get pretrained models
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+# vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.2
@@ -60,13 +65,6 @@ test_dataset = val_test_split['test']
 
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
-
-# shuffle again for 1.1
-train_dataset = dataset.shuffle(config.seed + 1)
-
-# Get pretrained models
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
-vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
 print("num cpu cores:", os.cpu_count())
 print("setting num_workers to 16")
@@ -128,9 +126,9 @@ Trainer = ProtDiffusionTrainer(transformer=transformer,
                                eval_seq_len = [2048, 2048, 1024, 1024], # the sequence lengths to evaluate on
                                eval_class_labels = [0,1,0,1], # the class labels to evaluate on, should be a list the same length as the eval batch size
                                eval_guidance_scale = 4.0, # the scale of the guidance for the diffusion
-                               eval_num_inference_steps = 1000, # the number of inference steps for the diffusion
+                               eval_num_inference_steps = 100, # the number of inference steps for the diffusion
 )
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/ProtDiffusion-UniRef50_v1.1/checkpoints/checkpoint_4')
+    Trainer.train()

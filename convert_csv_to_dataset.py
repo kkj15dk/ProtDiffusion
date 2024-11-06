@@ -14,9 +14,10 @@ id_key = 'clusterid' # This is the column to group by
 label_key = 'familytaxonid'
 pad_to_multiple_of = 16
 output_path = '/home/kkj/ProtDiffusion/datasets/'
-input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv' # Has to be sorted by id
-filename_encoded = 'UniRef50-test'
-filename_grouped = 'UniRef50-test'
+# input_path = '/home/kkj/ProtDiffusion/datasets/UniRef50_sorted.csv' # Has to be sorted by id
+input_path = '/home/kkj/ProtDiffusion/ACP.csv'
+filename_encoded = 'ACP'
+filename_grouped = 'ACP'
 
 # %%
 # Define the transformation function for batches

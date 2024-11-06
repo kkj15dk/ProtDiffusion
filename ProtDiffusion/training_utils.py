@@ -933,7 +933,7 @@ class ProtDiffusionTrainingConfig:
     ema_update_every: int = 1 # the number of steps to wait before updating the EMA
 
     use_batch_optimal_transport: bool = True # whether to use optimal transport for the batch to reorder the noise
-    use_logitnorm_timestep_sampling: bool = True # whether to use the logitnorm sampling for the timestep
+    use_logitnorm_timestep_sampling: bool = False # whether to use the logitnorm sampling for the timestep
     logitnorm_m: float = 0 # the m parameter for the logitnorm sampling
     logitnorm_s: float = 1 # the s parameter for the logitnorm sampling
 
@@ -1064,12 +1064,16 @@ class ProtDiffusionTrainer:
             if p.requires_grad and p.grad is not None:
                 p.grad.data = p.grad.data / n_tokens
 
-    def logitnorm(self, bs: int, m: int, s: int, generator: Optional[torch.Generator] = None) -> torch.Tensor:
+
+    def logitnorm(self, bs: int, m: int, s: int, generator: Optional[torch.Generator] = None) -> torch.Tensor: # TODO: fix bug. This is wrongfully implemented
         '''
         draw random samples from a logitnormal distribution. https://arxiv.org/pdf/2403.03206
         '''
-        rand = torch.rand((bs,), device=self.accelerator.device, generator=generator)
-        samples = (1 / (s * torch.sqrt(torch.tensor(2 * torch.pi)))) * ( 1 / (rand * (1 - rand))) * torch.exp(-0.5 * ((torch.log(rand / (1 - rand)) - m) / s) ** 2)
+
+        assert m == 0 and s == 1, "The logitnormal distribution is only implemented for m=0 and s=1"
+
+        rand = torch.randn((bs,), device=self.accelerator.device, generator=generator)
+        samples = 1 / (1 + torch.exp(-rand))
         return samples
 
     def get_timesteps(self, bs: int, generator: Optional[torch.Generator] = None) -> torch.Tensor:
@@ -1082,7 +1086,8 @@ class ProtDiffusionTrainer:
 
         if self.diffusion and not self.flow: # Diffusion
             if self.config.use_logitnorm_timestep_sampling:
-                raise NotImplementedError("Logitnorm timestep sampling is not implemented with diffusion")
+                timesteps = self.logitnorm(bs, self.config.logitnorm_m, self.config.logitnorm_s, generator)
+                timesteps = torch.round(timesteps * self.noise_scheduler.config.num_train_timesteps).to(dtype=torch.int) # scale to the number of timesteps
             timesteps = torch.randint(
                     0, self.noise_scheduler.config.num_train_timesteps, (bs,), device=self.accelerator.device,
                     dtype=torch.int64,
@@ -1165,6 +1170,8 @@ class ProtDiffusionTrainer:
                         dtype=torch.float32,
                         generator=generator,
             )
+            if self.diffusion and not self.flow: # Diffusion
+                timesteps = (self.noise_scheduler.config.num_train_timesteps * timesteps).to(dtype=torch.int) # round to the nearest integer
 
             # Add noise to the clean images according to the noise magnitude at each timestep
             noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps) # Same method for both diffusion and flow matching

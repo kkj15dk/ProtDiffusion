@@ -20,9 +20,9 @@ config = ProtDiffusionTrainingConfig(
     learning_rate = 1e-5,
     lr_warmup_steps = 300,
     lr_schedule = 'constant', # 'constant', 'cosine'
-    save_image_model_steps = 320,
+    save_image_model_steps = 10000,
     save_every_epoch = True,
-    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v2.4-flow-logitnorm"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-PKSs-test_v2.6-diff-logitnorm"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=4096, # 512 * 2**6
@@ -32,6 +32,7 @@ config = ProtDiffusionTrainingConfig(
     ema_update_after=100,
     ema_update_every=10,
     use_batch_optimal_transport=True, #False
+    use_logitnorm_timestep_sampling=True,
 )
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
@@ -112,8 +113,8 @@ transformer = DiTTransformer1DModel(
 count_parameters(transformer) # Count the parameters of the model and print
 
 # %%
-# noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
-noise_scheduler = FlowMatchingEulerScheduler(num_inference_steps=100)
+noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
+# noise_scheduler = FlowMatchingEulerScheduler(num_inference_steps=100)
 
 Trainer = ProtDiffusionTrainer(transformer=transformer,
                                vae=vae,

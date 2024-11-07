@@ -10,14 +10,16 @@ import os
 
 config = VAETrainingConfig(
     num_epochs=5, # the number of epochs to train for
-    batch_size=32, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
+    batch_size=16, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
     mega_batch=1000,
     gradient_accumulation_steps=16,
-    learning_rate=1e-5,
+    learning_rate=4e-5,
     lr_warmup_steps=1000,
+    lr_schedule='cosine_10x_decay',
     kl_warmup_steps=2000,
+    kl_weight=0.01,
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v9.1_latent-8"), # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v9.2_latent-8"), # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=8192, # 512 * 16 ((2**4))
@@ -108,7 +110,7 @@ model = AutoencoderKL1D(
     layers_per_block=2,  # how many ResNet layers to use per UNet block
     transformer_layers_per_block=1, # how many transformer layers to use per ResNet layer. Not implemented yet.
 
-    latent_channels=8,  # the dimensionality of the latent space
+    latent_channels=1,  # the dimensionality of the latent space
 
     num_attention_heads=1,  # the number of attention heads in the spatial self-attention blocks
     upsample_type="conv", # the type of upsampling to use, either 'conv' (and nearest neighbor) or 'conv_transpose'

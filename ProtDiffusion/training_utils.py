@@ -666,7 +666,7 @@ class VAETrainer:
                 # remove the padding
                 logoplot_sample_len = length[0]
                 logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
-                logoplot_sample_id = str(batch['id'][0], encoding='ut-8')
+                logoplot_sample_id = str(batch['id'][0])
                 probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
                 pool = mp.Pool(1)
                 pool.apply_async(make_logoplot, 
@@ -1123,8 +1123,7 @@ class ProtDiffusionTrainer:
 
         return loss
 
-    def evaluate(self):
-        model: DiTTransformer1DModel = self.ema.ema_model
+    def evaluate(self, model: DiTTransformer1DModel):
         model.eval()
         dataloader = self.val_dataloader
         if dataloader.batch_sampler.shuffle == False: # TODO: there's a bug in the very first evaluation. All subsequent evaluations work fine when using shuffle=False.
@@ -1194,10 +1193,7 @@ class ProtDiffusionTrainer:
             progress_bar.update(1)
 
         val_loss = running_loss / len(dataloader)
-        logs = {"val_loss": val_loss,
-                "step": self.training_variables.global_step,
-        }
-        return logs
+        return val_loss
 
     @torch.no_grad()
     def inference_test(self,
@@ -1408,17 +1404,22 @@ class ProtDiffusionTrainer:
                 # Evaluation and saving the model
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
                     
-            #### My RAM gats eaten somewhere here
-                    # # Test of inference
-                    # self.accelerator.wait_for_everyone()
-                    # pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
-                    # self.inference_test(pipeline)
-            #### My RAM gats eaten somewhere here
+            ### My RAM gats eaten somewhere here
+                    # Test of inference using the EMA model
+                    self.accelerator.wait_for_everyone()
+                    if self.accelerator.is_main_process:
+                        pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.ema.ema_model), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                        self.inference_test(pipeline)
+            ### My RAM gats eaten somewhere here
 
 
                     # Evaluation
                     self.accelerator.wait_for_everyone()
-                    logs = self.evaluate()
+                    ema_loss = self.evaluate(self.ema.ema_model)
+                    mse_loss = self.evaluate(self.transformer)
+                    logs = {"val_loss_ema": ema_loss, 
+                            "val_loss_mse": mse_loss,
+                    }
                     self.accelerator.log(logs, step=self.training_variables.global_step)
                     if self.accelerator.is_main_process:
                         self.accelerator.save_state()
@@ -1429,7 +1430,7 @@ class ProtDiffusionTrainer:
             if self.config.save_every_epoch:
 
             ### My RAM gats eaten somewhere here
-                # Test of inference
+                # Test of inference using the MSE model every epoch
                 self.accelerator.wait_for_everyone()
                 if self.accelerator.is_main_process:
                     pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
@@ -1438,7 +1439,11 @@ class ProtDiffusionTrainer:
 
                 # Evaluation
                 self.accelerator.wait_for_everyone()
-                logs = self.evaluate()
+                ema_loss = self.evaluate(self.ema.ema_model)
+                mse_loss = self.evaluate(self.transformer)
+                logs = {"val_loss_ema": ema_loss, 
+                        "val_loss_mse": mse_loss,
+                }
                 self.accelerator.log(logs, step=self.training_variables.global_step)
                 if self.accelerator.is_main_process:
                     self.accelerator.save_state()

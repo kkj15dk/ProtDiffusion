@@ -15,21 +15,21 @@ import os
 config = ProtDiffusionTrainingConfig(
     num_epochs=1000, # the number of epochs to train for
     batch_size=32,
-    mega_batch=10,
-    gradient_accumulation_steps=2,
-    learning_rate = 1e-5,
-    lr_warmup_steps = 300,
+    mega_batch=200,
+    gradient_accumulation_steps=16,
+    learning_rate = 1e-4,
+    lr_warmup_steps = 1000, # 100
     lr_schedule = 'constant', # 'constant', 'cosine'
-    save_image_model_steps = 10000,
+    save_image_model_steps = 500,
     save_every_epoch = True,
-    output_dir=os.path.join("output","ProtDiffusion-ACP_v1.0-diff-logitnorm"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-ACP_v3.4-diff-logitnorm"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=4096, # 512 * 2**6
     max_len_start=4096,
     max_len_doubling_steps=100,
-    ema_decay=0.9999,
-    ema_update_after=100,
+    ema_decay=0.99,
+    ema_update_after=300, # 100
     ema_update_every=10,
     use_batch_optimal_transport=True, #False
     use_logitnorm_timestep_sampling=True,
@@ -38,23 +38,24 @@ print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 generator = torch.Generator().manual_seed(config.seed)
 
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/ACP_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/PKSs_grouped')
-# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test_grouped')
-dataset = load_from_disk('/work3/s204514/ACP_grouped')
+# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
+# dataset = load_from_disk('/work3/s204514/ACP_grouped')
 # dataset = load_from_disk('/work3/s204514/PKSs_grouped')
 # dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 train_dataset = dataset.shuffle(config.seed)
 
 # %%
-# # Get pretrained models
-# vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
-# tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # Get pretrained models
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
-vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/pretrained/EMA')
+vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+# # Get pretrained models
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+# vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
 # Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.1
+train_test_split_ratio = 0.01
 train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
 train_dataset = train_val_test_split['train']
 # temp_dataset = train_val_test_split['test']
@@ -98,7 +99,7 @@ print("length of val dataloader: ", len(val_dataloader))
 # %%
 transformer = DiTTransformer1DModel(
     num_attention_heads = 8,
-    attention_head_dim = 72,
+    attention_head_dim = 64,
     in_channels = vae.config.latent_channels,
     num_layers = 8,
     attention_bias = True,

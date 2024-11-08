@@ -475,7 +475,7 @@ class BatchSampler(Sampler):
         attention_mask = tokenized['attention_mask'].to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
         label = torch.tensor(label_list)
         length = torch.tensor(length_list)
-        id = np.array(id_list).astype(np.bytes_)
+        id = np.array(id_list) # .astype(np.bytes_)
         # label = label_list
         # length = length_list
         # id = id_list
@@ -690,7 +690,7 @@ class VAETrainer:
         latent_data = []
         name = f"step_{self.training_variables.global_step//1:08d}"
 
-        progress_bar = tqdm(total=len(self.val_dataloader), disable = not self.accelerator.is_local_main_process)
+        progress_bar = tqdm(total=len(self.val_dataloader), disable = True) # not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Evaluating {name}")
 
         for i, batch in enumerate(self.val_dataloader):
@@ -844,7 +844,7 @@ class VAETrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable = not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable = True) # not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
@@ -1188,7 +1188,7 @@ class ProtDiffusionTrainer:
         else:
             generator = None
 
-        progress_bar = tqdm(total=len(dataloader), disable=not self.accelerator.is_local_main_process)
+        progress_bar = tqdm(total=len(dataloader), disable = not self.accelerator.is_local_main_process)
 
         running_loss = 0.0
 

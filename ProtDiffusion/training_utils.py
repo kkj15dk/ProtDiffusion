@@ -434,7 +434,9 @@ class BatchSampler(Sampler):
 
         # assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertion on the dataset level.
 
+        print("length batch[0]: ", batch[0][self.length_key])
         length_list = [item[self.length_key] for item in batch]
+        print("length_list: ", length_list)
         sample_max_len = max(length_list)
         max_length_cap = self.max_length
 
@@ -564,7 +566,7 @@ class BatchSampler(Sampler):
 
             # pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
 
-            mega_batch_indices = torch.randperm(self.mega_batch_size, generator=self.generator) * self.batch_size
+            mega_batch_indices = torch.randperm((pool.shape[0] // self.batch_size) + 1, generator=self.generator) * self.batch_size
 
             for j in mega_batch_indices:
                 if self.drop_last and j + self.batch_size > pool.shape[0]: # drop the last batch if it's too small

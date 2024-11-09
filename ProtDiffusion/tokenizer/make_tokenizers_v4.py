@@ -12,7 +12,7 @@ from transformers import PreTrainedTokenizerFast
 class TrainingConfig:
     padding_side = "right"  # where to put the padding tokens.
     output_dir = "protein_tokenizer"  # the model name locally and on the HF Hub
-    pad_token = "_"
+    pad_token = "-"
     unk_token = "?"
     push_to_hub = True  # whether to upload the saved model to the HF Hub
     repo_id = "kkj15dk/protein_tokenizer"  # the name of the repository to create on the HF Hub
@@ -37,7 +37,7 @@ fast_tokenizer = PreTrainedTokenizerFast(tokenizer_object=tokenizer,
                                          clean_up_tokenization_spaces=False,
 )
 
-fast_tokenizer.save_pretrained('tokenizer_v4.1')
+fast_tokenizer.save_pretrained('tokenizer_v4.2')
 
 def encode(example):
     return fast_tokenizer(example['sequence'],

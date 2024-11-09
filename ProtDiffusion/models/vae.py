@@ -60,10 +60,9 @@ class DiagonalGaussianDistribution1D(object):
         Using mean to reduce the KL divergence, so it does not depend on the batch and length dimension, which may vary.
         The channel dimension is the only dimension that stays constant.
         '''
-        return 0.5 * torch.mean(
-            torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar,
-            dim = 1
-        ) # B, L
+
+        KLD = 0.5 * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim = 1) # TODO: make sure using sum is the correct implementation
+        return KLD # B, L
 
     def mode(self) -> torch.Tensor:
         return self.mean
@@ -231,9 +230,9 @@ class Encoder1D(nn.Module):
             if attention_mask is not None:
                 # Downsample the attention mask
                 dtype = attention_mask.dtype
-                attention_mask = attention_mask.logical_not().to(torch.float32)
+                attention_mask = attention_mask.to(torch.float32)
                 attention_mask = F.max_pool1d(attention_mask, kernel_size=2, stride=2, padding=0)
-                attention_mask = attention_mask.logical_not().to(dtype)
+                attention_mask = attention_mask.to(dtype)
                 # Apply the attention mask
                 sample = sample * attention_mask.unsqueeze(1) # TODO: added 13/10
             # Save the attention mask

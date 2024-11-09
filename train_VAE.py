@@ -9,21 +9,21 @@ from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
 import os
 
 config = VAETrainingConfig(
-    num_epochs=5, # the number of epochs to train for
+    num_epochs=3, # the number of epochs to train for
     batch_size=32, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
     mega_batch=1000,
-    gradient_accumulation_steps=16,
+    gradient_accumulation_steps=2,
     learning_rate=4e-5,
     lr_warmup_steps=1000,
     lr_schedule='cosine_10x_decay',
     kl_warmup_steps=2000,
     kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
     save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v10.1_latent-2"), # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v13.1_latent-2"), # the model name locally and on the HF Hub
     total_checkpoints_limit=3, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=8192, # 512 * 16 ((2**4))
-    max_len_start=512,
+    max_len_start=64,
     max_len_doubling_steps=100000,
     ema_decay=0.9999,
     ema_update_after=1000,
@@ -32,13 +32,14 @@ config = VAETrainingConfig(
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
-# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
+# dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
 
 # Split the dataset into train and temp sets using the datasets library
 train_test_split_ratio = 0.0002

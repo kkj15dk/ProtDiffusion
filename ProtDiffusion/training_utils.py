@@ -348,16 +348,19 @@ class ClusteredDataset(Dataset):
         length = []
         label = []
         sequence = []
-        
+
         for i in range(len(idx)):
             sampleindex_i = sampleindex[i]
             length.append(data[self.length_key][i][sampleindex_i])
             label.append(data[self.label_key][i][sampleindex_i])
             sequence.append(data[self.sequence_key][i][sampleindex_i])
+        
+        id = np.array(id).astype(np.bytes_)
+        sequence = np.array(sequence).astype(np.bytes_)
+        label = np.array(label).astype(np.int64)
+        length = np.array(length).astype(np.int64)
 
-        out = {'id': id, 'length': length, 'label': label, 'sequence': sequence}
-
-        return out
+        return {'id': id, 'length': length, 'label': label, 'sequence': sequence}
 
 class BatchSampler(Sampler): 
     '''
@@ -397,6 +400,7 @@ class BatchSampler(Sampler):
         else:
             self.generator = None
         self.shuffle = shuffle
+        assert self.batch_size * self.mega_batch_size // self.num_workers > 0, "The batch size times the mega batch size must be larger than the number of workers."
 
     def process_sequence(self,
                      sequence: str,
@@ -446,7 +450,7 @@ class BatchSampler(Sampler):
         for i, item in enumerate(batch):
             # id
             id = item[self.id_key]
-            # id = str(id, encoding = 'utf-8')
+            id = str(id, encoding = 'utf-8')
             id_list.append(id)
 
             # label
@@ -454,7 +458,7 @@ class BatchSampler(Sampler):
 
             # sequence
             seq = item[self.sequence_key]
-            # seq = str(seq, encoding='utf-8')
+            seq = str(seq, encoding='utf-8')
             seq = self.process_sequence(seq)
             seq_len = item[self.length_key]
 
@@ -468,22 +472,26 @@ class BatchSampler(Sampler):
                         padding=True,
                         truncation=False, # We truncate the sequences beforehand
                         return_token_type_ids=False,
-                        return_attention_mask=True,
+                        return_attention_mask=False, # We make the attention mask ourselves, as the tokenizer does not recognize already padded inputs.
                         return_tensors="pt",
         )
         input_ids = tokenized['input_ids']
-        attention_mask = tokenized['attention_mask'].to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
+        attention_mask: torch.BoolTensor = (input_ids != self.tokenizer.pad_token_id).to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
+        # attention_mask = tokenized['attention_mask'].to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
         label = torch.tensor(label_list)
         length = torch.tensor(length_list)
-        id = np.array(id_list) # .astype(np.bytes_)
+        id = np.array(id_list).astype(np.bytes_)
+        sequence = np.array(seq_list).astype(np.bytes_)
+
         # label = label_list
         # length = length_list
         # id = id_list
+        # sequence = seq_list
 
         return {
             'id': id, 
             'label': label,
-            # 'sequence': sequence,
+            'sequence': sequence,
             'length': length,
             'input_ids': input_ids,
             'attention_mask': attention_mask,
@@ -496,6 +504,7 @@ class BatchSampler(Sampler):
 
         # If shuffle is false, we remake the generator each epoch for deterministic val loaders
         if self.shuffle == False:
+            print("Shuffle is false, remaking the generator")
             self.generator = torch.Generator().manual_seed(self.seed)
 
         size = len(self.dataset)
@@ -508,22 +517,22 @@ class BatchSampler(Sampler):
 
             # New implementation
             # Use torch.multiprocessing to get lengths
-            manager = mp.Manager()
-            return_dict = manager.dict()
-            processes = []
-            chunk_size = step // self.num_workers
-            chunks = [pool_indices[j:j + chunk_size] for j in range(0, step, chunk_size)]
+            with mp.Manager() as manager:
+                return_dict = manager.dict()
+                processes = []
+                chunk_size = step // self.num_workers
+                chunks = [pool_indices[j:j + chunk_size] for j in range(0, step, chunk_size)]
 
-            for process_id, chunk in enumerate(chunks):
-                p = mp.Process(target=self.get_lengths, args=(chunk, return_dict, process_id))
-                p.start()
-                processes.append(p)
+                for process_id, chunk in enumerate(chunks):
+                    p = mp.Process(target=self.get_lengths, args=(chunk, return_dict, process_id))
+                    p.start()
+                    processes.append(p)
 
-            for p in processes:
-                p.join()
-            
-            # Retrieve results in order
-            pool_lenlists = [lenlist for process_id in sorted(return_dict.keys()) for lenlist in return_dict[process_id]]
+                for p in processes:
+                    p.join()
+                
+                # Retrieve results in order
+                pool_lenlists = [lenlist for process_id in sorted(return_dict.keys()) for lenlist in return_dict[process_id]]
 
             # # New implementation
             lengths = torch.zeros((len(pool_indices),), dtype=torch.int64) # lengths of the sequences
@@ -555,8 +564,8 @@ class BatchSampler(Sampler):
 
             # pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
 
+            mega_batch_indices = torch.randperm(self.mega_batch_size, generator=self.generator) * self.batch_size
 
-            mega_batch_indices = torch.randperm((pool.shape[0] // self.batch_size) + 1, generator=self.generator)
             for j in mega_batch_indices:
                 if self.drop_last and j + self.batch_size > pool.shape[0]: # drop the last batch if it's too small
                     continue
@@ -717,7 +726,7 @@ class VAETrainer:
                 # remove the padding
                 logoplot_sample_len = length[0]
                 logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
-                logoplot_sample_id = str(batch['id'][0])
+                logoplot_sample_id = str(batch['id'][0], encoding='utf-8')
                 probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
                 pool = mp.Pool(1)
                 pool.apply_async(make_logoplot, 
@@ -754,8 +763,8 @@ class VAETrainer:
             seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
             # Save all samples as a FASTA file
-            # seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i], encoding='utf-8'), 
-            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
+            seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i], encoding='utf-8'), 
+            # seq_record_list = [SeqRecord(Seq(seq), id=str(batch['id'][i]), 
                             description=
                             f"label: {batch[self.label_key][i]} acc: {token_ids_correct[i].sum().item() / num_residues[i].item():.3f}")
                             for i, seq in enumerate(seqs_pred)]

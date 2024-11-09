@@ -220,12 +220,16 @@ class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         else:
             ce_loss = ce_loss.mean()
 
-        kl_loss = output.latent_dist.kl()
+        kl_loss = output.latent_dist.kl() # B, L
         if output.attention_masks[-1] is not None:
             kl_loss = kl_loss * output.attention_masks[-1] # B, L
             kl_loss = torch.sum(kl_loss) / output.attention_masks[-1].sum()
+            # kl_loss = torch.sum(kl_loss, dim=-1) # B : sum along the sequence length, for the correct implementation of the KL loss
+            # kl_loss = kl_loss.mean() # take the mean over the batch
         else:
-            kl_loss = kl_loss.mean()
+            kl_loss = torch.sum(kl_loss) / output.attention_masks[-1].sum()
+            # kl_loss = torch.sum(kl_loss, dim=-1) # B : sum along the sequence length, for the correct implementation of the KL loss
+            # kl_loss = kl_loss.mean()
 
         return ce_loss, kl_loss
     

@@ -4,7 +4,7 @@
 #BSUB -q gpuv100
 #BSUB -R "select[gpu32gb]"
 ### -- set the job Name -- 
-#BSUB -J train
+#BSUB -J train_VAE
 ### -- ask for number of cores (default: 4) -- 
 #BSUB -n 16
 ### -- Select the resources: 1 gpu in exclusive process mode --

@@ -22,11 +22,11 @@ config = ProtDiffusionTrainingConfig(
     lr_schedule = 'constant', # 'constant', 'cosine'
     save_image_model_steps = 500,
     save_every_epoch = True,
-    output_dir=os.path.join("output","ProtDiffusion-ACP_v3.4-diff-logitnorm"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-UniRef50-test_v3.1-diff-logitnorm"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     max_len=4096, # 512 * 2**6
-    max_len_start=4096,
+    max_len_start=64,
     max_len_doubling_steps=100,
     ema_decay=0.99,
     ema_update_after=300, # 100
@@ -38,9 +38,9 @@ print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 generator = torch.Generator().manual_seed(config.seed)
 
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/ACP_grouped')
+# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/ACP_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/PKSs_grouped')
-# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 # dataset = load_from_disk('/work3/s204514/ACP_grouped')
 # dataset = load_from_disk('/work3/s204514/PKSs_grouped')
 # dataset = load_from_disk('/work3/s204514/UniRef50_grouped')

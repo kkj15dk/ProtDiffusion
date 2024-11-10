@@ -332,7 +332,7 @@ class ClusteredDataset(Dataset):
         '''
 
         if torch.is_tensor(idx):
-            idx = idx.tolist()
+            idx = idx.detach().tolist()
 
         assert isinstance(idx, List), "The index must be a list"
         assert all(isinstance(i, List) for i in idx), "The index must be a list of lists"
@@ -434,9 +434,7 @@ class BatchSampler(Sampler):
 
         # assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertion on the dataset level.
 
-        print("length batch[0]: ", batch[0][self.length_key])
         length_list = [item[self.length_key] for item in batch]
-        print("length_list: ", length_list)
         sample_max_len = max(length_list)
         max_length_cap = self.max_length
 
@@ -493,7 +491,7 @@ class BatchSampler(Sampler):
         return {
             'id': id, 
             'label': label,
-            'sequence': sequence,
+            # 'sequence': sequence,
             'length': length,
             'input_ids': input_ids,
             'attention_mask': attention_mask,
@@ -506,7 +504,6 @@ class BatchSampler(Sampler):
 
         # If shuffle is false, we remake the generator each epoch for deterministic val loaders
         if self.shuffle == False:
-            print("Shuffle is false, remaking the generator")
             self.generator = torch.Generator().manual_seed(self.seed)
 
         size = len(self.dataset)
@@ -566,7 +563,7 @@ class BatchSampler(Sampler):
 
             # pool = [(pool_id, sample_id) for _, pool_id, sample_id in pool]
 
-            mega_batch_indices = torch.randperm((pool.shape[0] // self.batch_size) + 1, generator=self.generator) * self.batch_size
+            mega_batch_indices = torch.randperm(math.ceil(pool.shape[0] / self.batch_size), generator=self.generator) * self.batch_size
 
             for j in mega_batch_indices:
                 if self.drop_last and j + self.batch_size > pool.shape[0]: # drop the last batch if it's too small
@@ -701,14 +698,14 @@ class VAETrainer:
         latent_data = []
         name = f"step_{self.training_variables.global_step//1:08d}"
 
-        progress_bar = tqdm(total=len(self.val_dataloader), disable = True) # not self.accelerator.is_local_main_process)
+        progress_bar = tqdm(total=len(self.val_dataloader), disable = not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Evaluating {name}")
 
         for i, batch in enumerate(self.val_dataloader):
 
-            input_ids = batch['input_ids']
-            attention_mask = batch['attention_mask']
-            length = batch['length']
+            input_ids: torch.IntTensor = batch['input_ids']
+            attention_mask: torch.BoolTensor = batch['attention_mask']
+            length: torch.IntTensor = batch['length']
 
             output = model(sample = input_ids,
                            attention_mask = attention_mask,
@@ -717,11 +714,9 @@ class VAETrainer:
 
             ce_loss, kl_loss = model.loss_fn(output, input_ids)
             loss = ce_loss + kl_loss * self.config.kl_weight
-            running_loss_ce += ce_loss.item()
-            running_loss_kl += kl_loss.item()
-            running_loss += loss.item()
-            running_loss_ce += ce_loss.item()
-            running_loss_kl += kl_loss.item()
+            running_loss_ce += ce_loss.detach().item()
+            running_loss_kl += kl_loss.detach().item()
+            running_loss += loss.detach().item()
             
             if i == 0 and self.accelerator.is_main_process: # save the first sample each evaluation as a logoplot
                 logoplot_sample = output.sample[0]
@@ -748,13 +743,13 @@ class VAETrainer:
             token_ids_correct = ((input_ids == token_ids_pred) & (attention_mask == 1)).long()
             num_residues = torch.sum(attention_mask, dim=1).long()
 
-            num_correct_residues += token_ids_correct.sum().item()
-            total_residues += num_residues.sum().item()
+            num_correct_residues += token_ids_correct.detach().sum().item()
+            total_residues += num_residues.detach().sum().item()
 
             # get the latent space data
-            latent = output.latent_dist.sample() # TODO: sample or mode?
-            mask = output.attention_masks[-1].unsqueeze(1).expand_as(latent)
-            data = latent[mask].tolist()
+            latent: torch.Tensor = output.latent_dist.sample() # TODO: sample or mode?
+            mask: torch.BoolTensor = output.attention_masks[-1].unsqueeze(1).expand_as(latent)
+            data = latent[mask].detach().tolist()
             latent_data.extend(data)
 
             # Decode the predicted sequences, and remove zero padding
@@ -855,7 +850,7 @@ class VAETrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable = True) # not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable = not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
@@ -1479,7 +1474,6 @@ class ProtDiffusionTrainer:
                         pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.ema.ema_model), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
                         self.inference_test(pipeline)
             ### My RAM gats eaten somewhere here
-
 
                     # Evaluation
                     self.accelerator.wait_for_everyone()

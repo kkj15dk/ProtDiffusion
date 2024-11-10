@@ -16,8 +16,8 @@ pad_to_multiple_of = 16
 output_path = '/home/kkj/ProtDiffusion/datasets/'
 # input_path = '/home/kkj/ProtDiffusion/datasets/UniRef50_sorted.csv' # Has to be sorted by id
 input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv'
-filename_encoded = 'UniRef50-test-bad?'
-filename_grouped = 'UniRef50-test-bad?'
+filename_encoded = 'UniRef50-test-good?'
+filename_grouped = 'UniRef50-test-good?'
 
 # %%
 # Define the transformation function for batches
@@ -37,11 +37,11 @@ def preprocess(example: dict,
     length = round_length(len(sequence), rounding=pad_to_multiple_of)
     return {'sequence': sequence, 'label': label, 'length': length}
 
-# def list_to_np(chunk):
-#     chunk['label'] = chunk['label'].apply(lambda x: np.array(x).astype(np.int16))
-#     chunk['length'] = chunk['length'].apply(lambda x: np.array(x).astype(np.int16))
-#     chunk['sequence'] = chunk['sequence'].apply(lambda x: np.array(x).astype(np.string_))
-#     return chunk
+def list_to_np(chunk):
+    chunk['label'] = chunk['label'].apply(lambda x: np.array(x).astype(np.int16))
+    chunk['length'] = chunk['length'].apply(lambda x: np.array(x).astype(np.int16))
+    chunk['sequence'] = chunk['sequence'].apply(lambda x: np.array(x).astype(np.bytes_))
+    return chunk
 
 def stream_groupby_gen(dataset: Dataset, 
                        id_key: str, 
@@ -74,21 +74,22 @@ def stream_groupby_gen(dataset: Dataset,
         # Put the new orphans aside
         chunk, orphans = chunk[~is_orphan], chunk[is_orphan]
         # Perform the aggregation and store the results
-        chunk = agg(chunk).reset_index()
-        # chunk = list_to_np(chunk).reset_index()
+        chunk = agg(chunk)
+        chunk = list_to_np(chunk)
 
-        dataset = Dataset.from_pandas(chunk)
         for i in range(len(chunk)):
-            yield dataset[i]
+            data = chunk.iloc[i]
+            yield {'id': data.name, 'label': data['label'], 'length': data['length'], 'sequence': data['sequence']}
+
 
     # Don't forget the remaining orphans
     if len(orphans):
         chunk = agg(orphans)
-        # chunk = list_to_np(chunk).reset_index()
+        chunk = list_to_np(chunk)
 
-        dataset = Dataset.from_pandas(chunk)
         for i in range(len(chunk)):
-            yield dataset[i]
+            data = chunk.iloc[i]
+            yield {'id': data.name, 'label': data['label'], 'length': data['length'], 'sequence': data['sequence']}
 
 # %%
 # Load the dataset
@@ -129,7 +130,7 @@ if not os.path.exists(f'{output_path}{filename_grouped}_grouped'):
     print("Loaded dataset, starting grouping")
     dataset = Dataset.from_generator(stream_groupby_gen, 
                                      gen_kwargs={'dataset': dataset, 'id_key': id_key},
-    ) # .with_format('numpy')
+    ).with_format('numpy')
     print("Grouping done, saving to disk")
     dataset.save_to_disk(f'{output_path}{filename_grouped}_grouped')
 else:

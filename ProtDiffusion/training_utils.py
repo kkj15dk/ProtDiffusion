@@ -130,6 +130,7 @@ class VAETrainingConfig:
     skip_special_tokens = False # whether to skip the special tokens when writing the evaluation sequences
     kl_weight: float = 0.1 # the weight of the KL divergence in the loss function
     kl_warmup_steps: Optional[int] = None # the number of steps to warm up the KL divergence weight
+    kl_schedule: str = 'constant_with_warmup' # choose between 'constant_with_warmup', where there is a warmup of kl_warmup_steps, or 'constant_with_restarts', where the warmup restarts after a constant region of kl_warmup_steps.
 
     gradient_clip_val: Optional[float] = 5.0  # the value to clip the gradients to
     weight_decay: float = 0.01 # weight decay for the optimizer
@@ -662,6 +663,18 @@ class VAETrainer:
         self.seq_key = self.train_dataloader.dataset.sequence_key
         self.label_key = self.train_dataloader.dataset.label_key
 
+    def get_kl_weight(self):
+        if self.config.kl_schedule == 'constant_with_warmup':
+            progress = self.training_variables.global_step / (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps)
+            kl_weight = self.config.kl_weight * min(1.0, progress)
+        if self.config.kl_schedule == 'constant_with_restarts':
+            if self.training_variables.global_step + (2 * (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps)) >= len(self.train_dataloader) * self.config.num_epochs: # If theres is less than a cycle left, set the 
+                progress = 1.5
+            else:
+                progress = self.training_variables.global_step % (2 * (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
+            kl_weight = self.config.kl_weight * min(1.0, progress)
+        return kl_weight
+
     def update_max_len(self):
         if self.training_variables.max_len_start < self.config.max_len:
             self.training_variables.max_len_start *= 2
@@ -698,7 +711,7 @@ class VAETrainer:
         latent_data = []
         name = f"step_{self.training_variables.global_step//1:08d}"
 
-        progress_bar = tqdm(total=len(self.val_dataloader), disable = not self.accelerator.is_local_main_process)
+        progress_bar = tqdm(total=len(self.val_dataloader), disable = True) # not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Evaluating {name}")
 
         for i, batch in enumerate(self.val_dataloader):
@@ -850,7 +863,7 @@ class VAETrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable = not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable = True) #not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
@@ -872,8 +885,8 @@ class VAETrainer:
                     )
 
                     # Loss calculation
-                    ce_loss, kl_loss = self.model.loss_fn(output, input) 
-                    kl_weight = self.config.kl_weight * min(1.0, self.training_variables.global_step / (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
+                    ce_loss, kl_loss = self.model.loss_fn(output, input)
+                    kl_weight = self.get_kl_weight()
                     loss = ce_loss + kl_loss * kl_weight
                     loss_back = loss * attention_mask.sum() # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
 
@@ -920,7 +933,7 @@ class VAETrainer:
                     new_val_loss = logs["val_loss"]
 
                     self.accelerator.wait_for_everyone()
-                    if new_val_loss < self.training_variables.val_loss: # Save the model if the validation loss is lower
+                    if True: # new_val_loss < self.training_variables.val_loss: # Save the model if the validation loss is lower
                         self.training_variables.val_loss = new_val_loss
                         self.accelerator.save_state()
                     self.model.train() # Make sure the model is in train mode

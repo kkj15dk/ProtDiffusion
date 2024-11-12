@@ -2,37 +2,38 @@
 from ProtDiffusion.training_utils import VAETrainingConfig, make_clustered_dataloader, set_seed, VAETrainer, count_parameters
 from transformers import PreTrainedTokenizerFast
 
-from datasets import load_from_disk
+from datasets import load_from_disk, Dataset, DatasetDict
 
 from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
 
 import os
 
 config = VAETrainingConfig(
-    num_epochs=5, # the number of epochs to train for
-    batch_size=32, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
+    num_epochs=7, # the number of epochs to train for
+    batch_size=64, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
     mega_batch=1000,
     gradient_accumulation_steps=16,
-    learning_rate=1e-5,
-    lr_warmup_steps=1000,
+    learning_rate=1e-6,
+    lr_warmup_steps=2000,
     lr_schedule='cosine_10x_decay',
-    kl_warmup_steps=2000,
+    kl_warmup_steps=4000,
     kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
-    save_image_model_steps=10000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v14.1"), # the model name locally and on the HF Hub
-    total_checkpoints_limit=3, # the maximum number of checkpoints to keep
-    gradient_clip_val=1.0,
-    max_len=8192, # 512 * 16 ((2**4))
-    max_len_start=8192,
+    kl_schedule='constant_with_restarts',
+    save_image_model_steps=50000,
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v20.1"), # the model name locally and on the HF Hub
+    total_checkpoints_limit=1, # the maximum number of checkpoints to keep
+    gradient_clip_val=1.0, # 5.0,
+    max_len=4096, # 512 * 8 ((2**3))
+    max_len_start=512,
     max_len_doubling_steps=100000,
     ema_decay=0.9999,
-    ema_update_after=1000,
+    ema_update_after=8000,
     ema_update_every=100,
 )
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
+dataset = load_from_disk('/work3/s204514/UniRef50_splits')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 dataset = dataset.shuffle(config.seed)
 
@@ -42,17 +43,29 @@ dataset = dataset.shuffle(config.seed)
 tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
 
-# Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.0002
-train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
-train_dataset = train_val_test_split['train']
-temp_dataset = train_val_test_split['test']
+# # Split the dataset into train and temp sets using the datasets library
+# train_test_split_ratio = 0.0002
+# train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
+# train_dataset = train_val_test_split['train']
+# temp_dataset = train_val_test_split['test']
 
-# Split the temp set into validation and test sets using the datasets library
-val_test_split_ratio = 0.5
-val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
-val_dataset = val_test_split['train']
-test_dataset = val_test_split['test']
+# # Split the temp set into validation and test sets using the datasets library
+# val_test_split_ratio = 0.5
+# val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
+# val_dataset = val_test_split['train']
+# test_dataset = val_test_split['test']
+
+# dataset_dict = DatasetDict({
+#     'train': train_dataset,
+#     'valid': val_dataset,
+#     'test': test_dataset,
+# })
+
+# dataset_dict.save_to_disk('/work3/s204514/UniRef50_splits')
+
+train_dataset = dataset['train']
+val_dataset = dataset['valid']
+test_dataset = dataset['test']
 
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
@@ -112,7 +125,7 @@ model = AutoencoderKL1D(
     layers_per_block=2,  # how many ResNet layers to use per UNet block
     transformer_layers_per_block=1, # how many transformer layers to use per ResNet layer. Not implemented yet.
 
-    latent_channels=2,  # the dimensionality of the latent space
+    latent_channels=4,  # the dimensionality of the latent space
 
     num_attention_heads=1,  # the number of attention heads in the spatial self-attention blocks
     upsample_type="conv", # the type of upsampling to use, either 'conv' (and nearest neighbor) or 'conv_transpose'

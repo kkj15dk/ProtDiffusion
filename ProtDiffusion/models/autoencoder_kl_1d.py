@@ -33,7 +33,7 @@ from .vae import Decoder1D, DecoderOutput, DiagonalGaussianDistribution1D, Encod
 
 class AutoencoderKL1D(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     r"""
-    A VAE model with KL loss for encoding images into latents and decoding latent representations into images.
+    A VAE model with KL loss for encoding sequences into latents and decoding latent representations into sequences.
 
     This model inherits from [`ModelMixin`]. Check the superclass documentation for it's generic methods implemented
     for all models (such as downloading or saving).

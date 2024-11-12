@@ -104,7 +104,7 @@ class VAETrainingConfig:
     gradient_accumulation_steps: int = 2  # the number of steps to accumulate gradients before taking an optimizer step
     learning_rate: float = 1e-4  # the learning rate
     lr_warmup_steps:int  = 1000
-    lr_schedule: str = "cosine" # the learning rate schedule, choose between `constant`, `cosine`, and `cosine_10x_decay`
+    lr_schedule: str = "cosine" # the learning rate schedule, choose between `constant`, `cosine`, `cosine_10x_decay`, and `cosine_100x_decay`
     save_image_model_steps:int  = 1000
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
     optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`

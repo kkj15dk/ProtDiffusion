@@ -96,6 +96,39 @@ def get_cosine_10x_decay_schedule_with_warmup(
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
+def get_cosine_100x_decay_schedule_with_warmup(
+    optimizer: Optimizer, num_warmup_steps: int, num_training_steps: int, num_cycles: float = 0.5, last_epoch: int = -1
+) -> LambdaLR:
+    """
+    Create a schedule with a learning rate that decreases following the values of the cosine function between the
+    initial lr set in the optimizer to 10 times lower lr, after a warmup period during which it increases linearly between 0 and the
+    initial lr set in the optimizer.
+
+    Args:
+        optimizer ([`~torch.optim.Optimizer`]):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (`int`):
+            The number of steps for the warmup phase.
+        num_training_steps (`int`):
+            The total number of training steps.
+        num_periods (`float`, *optional*, defaults to 0.5):
+            The number of periods of the cosine function in a schedule (the default is to just decrease from the max
+            value to 10 times lower lr following a half-cosine).
+        last_epoch (`int`, *optional*, defaults to -1):
+            The index of the last epoch when resuming training.
+
+    Return:
+        `torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        return (99/200) * (101/99 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))
+
+    return LambdaLR(optimizer, lr_lambda, last_epoch)
+
 @dataclass
 class VAETrainingConfig:
     batch_size: int = 64  # the batch size
@@ -648,6 +681,12 @@ class VAETrainer:
                 num_warmup_steps=config.lr_warmup_steps,
                 num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
             )
+        elif config.lr_schedule == 'cosine_100x_decay':
+            lr_scheduler = get_cosine_100x_decay_schedule_with_warmup(
+                optimizer=optimizer,
+                num_warmup_steps=config.lr_warmup_steps,
+                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+            )
         else:
             raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')
         # Prepare everything
@@ -1097,6 +1136,12 @@ class ProtDiffusionTrainer:
             )
         elif config.lr_schedule == 'cosine_10x_decay':
             lr_scheduler = get_cosine_10x_decay_schedule_with_warmup(
+                optimizer=optimizer,
+                num_warmup_steps=config.lr_warmup_steps,
+                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+            )
+        elif config.lr_schedule == 'cosine_100x_decay':
+            lr_scheduler = get_cosine_100x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
                 num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),

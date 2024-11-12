@@ -710,7 +710,8 @@ class VAETrainer:
             if self.training_variables.global_step + (2 * (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps)) >= len(self.train_dataloader) * self.config.num_epochs: # If theres is less than a cycle left, set the 
                 progress = 1.5
             else:
-                progress = self.training_variables.global_step % (2 * (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
+                steps = self.training_variables.global_step % (2 * (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps))
+                progress = steps / (self.config.kl_warmup_steps * self.config.gradient_accumulation_steps)
             kl_weight = self.config.kl_weight * min(1.0, progress)
         return kl_weight
 

@@ -33,40 +33,40 @@ config = VAETrainingConfig(
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
-# dataset = load_from_disk('/work3/s204514/UniRef50_splits')
+dataset = load_from_disk('/work3/s204514/UniRef50_splits')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
-dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test-bad?_grouped')
+# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test-bad?_grouped')
 dataset = dataset.shuffle(config.seed)
 
 # %%
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
-# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
 
-# Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.2
-train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
-train_dataset = train_val_test_split['train']
-temp_dataset = train_val_test_split['test']
+# # Split the dataset into train and temp sets using the datasets library
+# train_test_split_ratio = 0.2
+# train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
+# train_dataset = train_val_test_split['train']
+# temp_dataset = train_val_test_split['test']
 
-# Split the temp set into validation and test sets using the datasets library
-val_test_split_ratio = 0.5
-val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
-val_dataset = val_test_split['train']
-test_dataset = val_test_split['test']
+# # Split the temp set into validation and test sets using the datasets library
+# val_test_split_ratio = 0.5
+# val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
+# val_dataset = val_test_split['train']
+# test_dataset = val_test_split['test']
 
-# dataset_dict = DatasetDict({
-#     'train': train_dataset,
-#     'valid': val_dataset,
-#     'test': test_dataset,
-# })
+# # dataset_dict = DatasetDict({
+# #     'train': train_dataset,
+# #     'valid': val_dataset,
+# #     'test': test_dataset,
+# # })
 
-# dataset_dict.save_to_disk('/work3/s204514/UniRef50_splits')
+# # dataset_dict.save_to_disk('/work3/s204514/UniRef50_splits')
 
-# train_dataset = dataset['train']
-# val_dataset = dataset['valid']
-# test_dataset = dataset['test']
+train_dataset = dataset['train']
+val_dataset = dataset['valid']
+test_dataset = dataset['test']
 
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")

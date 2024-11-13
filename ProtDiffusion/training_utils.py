@@ -446,7 +446,7 @@ class BatchSampler(Sampler):
         Process the sequence by adding the bos and eos tokens, and padding it to a multiple of 16 (or what the variable is set to in the round_kength).
         Return the sequence and the length of the sequence.
         '''
-        seq_len = round_length(len(sequence))
+        seq_len = round_length(len(sequence), pad = 2, rounding = self.pad_to_multiple_of)
         sequence = bos_token + sequence + eos_token
         len_diff = seq_len - len(sequence)
         if len_diff == 0:

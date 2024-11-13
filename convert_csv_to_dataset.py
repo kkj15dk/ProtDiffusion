@@ -12,7 +12,6 @@ from ProtDiffusion.training_utils import round_length
 sequence_key = 'sequence'
 id_key = 'clusterid' # This is the column to group by
 label_key = 'familytaxonid'
-pad_to_multiple_of = 16
 output_path = '/home/kkj/ProtDiffusion/datasets/'
 # input_path = '/home/kkj/ProtDiffusion/datasets/UniRef50_sorted.csv' # Has to be sorted by id
 input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv'
@@ -24,7 +23,6 @@ filename_grouped = 'UniRef50-test-bad?'
 def preprocess(example: dict,
                sequence_key: str = 'sequence', 
                label_key: str = 'familytaxonid', 
-               pad_to_multiple_of=pad_to_multiple_of,
 ):
     sequence = example[sequence_key]
     label = example[label_key]
@@ -34,7 +32,7 @@ def preprocess(example: dict,
         label = 1
     else:
         raise ValueError(f"Invalid label: {label}")
-    length = round_length(len(sequence), rounding=pad_to_multiple_of)
+    length = len(sequence)
     return {'sequence': sequence, 'label': label, 'length': length}
 
 # def list_to_np(chunk):
@@ -111,7 +109,6 @@ if not os.path.exists(f'{output_path}{filename_encoded}'):
     dataset = dataset.map(preprocess, 
                             fn_kwargs={'sequence_key': sequence_key, 
                                        'label_key': label_key,
-                                       'pad_to_multiple_of': pad_to_multiple_of,
                             },
                             remove_columns=[label_key],
                             batched=False, 

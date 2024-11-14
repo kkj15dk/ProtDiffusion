@@ -1,5 +1,5 @@
 # %%
-from datasets import load_dataset, load_from_disk, Dataset
+from datasets import load_dataset, load_from_disk, Dataset, DatasetDict
 from tqdm import tqdm
 import os
 import pandas as pd
@@ -10,13 +10,14 @@ from ProtDiffusion.training_utils import round_length
 # %%
 # Define the parameters
 sequence_key = 'sequence'
-id_key = 'clusterid' # This is the column to group by
+id_key = 'cluster50id' # This is the column to group by
 label_key = 'familytaxonid'
 output_path = '/home/kkj/ProtDiffusion/datasets/'
 # input_path = '/home/kkj/ProtDiffusion/datasets/UniRef50_sorted.csv' # Has to be sorted by id
-input_path = '/home/kkj/ProtDiffusion/datasets/testcase-UniRef50_sorted.csv'
-filename_encoded = 'UniRef50-test-bad?'
-filename_grouped = 'UniRef50-test-bad?'
+input_path = '/home/kkj/ProtDiffusion/datasets/UniRefALL_sorted.csv'
+filename_encoded = 'UniRefALL'
+filename_grouped = 'UniRef50'
+assert label_key != 'label', "label_key cannot be 'label', as it is used as a temporary column name, and deleted afterwards"
 
 # %%
 # Define the transformation function for batches
@@ -81,7 +82,7 @@ def stream_groupby_gen(dataset: Dataset,
 
     # Don't forget the remaining orphans
     if len(orphans):
-        chunk = agg(orphans)
+        chunk = agg(orphans).reset_index()
         # chunk = list_to_np(chunk).reset_index()
 
         dataset = Dataset.from_pandas(chunk)
@@ -89,32 +90,31 @@ def stream_groupby_gen(dataset: Dataset,
             yield dataset[i]
 
 # %%
-# Load the dataset
-dataset = load_dataset('csv', data_files=input_path)['train']
-
-# %%
-# dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
-# dataset = dataset.rename_column(' sequence', 'sequence')
-# dataset = dataset.rename_column(' cluster90id', 'cluster90id')
-# dataset = dataset.rename_column(' cluster100id', 'cluster100id')
-
-# %%
-# filter so that only sequences with ACDEFGHIKLMNOPQRSTUVWY are included
-# dataset = dataset.filter(lambda x: all(c in 'ACDEFGHIKLMNPQRSTVWY' for c in x['sequence']), num_proc=12)
-
-# %%
 # Encode the dataset
 if not os.path.exists(f'{output_path}{filename_encoded}'):
+    # Load the dataset
+    print(f"Loading {input_path}")
+    dataset = load_dataset('csv', data_files=input_path)['train']
+
+    # %%
+    dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
+    dataset = dataset.rename_column(' sequence', 'sequence')
+    dataset = dataset.rename_column(' cluster90id', 'cluster90id')
+    dataset = dataset.rename_column(' cluster100id', 'cluster100id')
+
+    # %%
+    # filter so that only sequences with ACDEFGHIKLMNOPQRSTUVWY are included
+    # dataset = dataset.filter(lambda x: all(c in 'ACDEFGHIKLMNPQRSTVWY' for c in x['sequence']), num_proc=12)
+    
     print(f"Encoding {filename_encoded}")
-    dataset = dataset.map(preprocess, 
-                            fn_kwargs={'sequence_key': sequence_key, 
-                                       'label_key': label_key,
-                            },
-                            remove_columns=[label_key],
-                            batched=False, 
-                            num_proc=12,
-    )
-    dataset.save_to_disk(f'{output_path}{filename_encoded}')
+    dataset.map(preprocess, 
+                fn_kwargs={'sequence_key': sequence_key, 
+                            'label_key': label_key,
+                },
+                remove_columns=[label_key],
+                batched=False, 
+                num_proc=16,
+    ).save_to_disk(f'{output_path}{filename_encoded}')
 else:
     print(f"{filename_encoded} already encoded")
 
@@ -127,8 +127,26 @@ if not os.path.exists(f'{output_path}{filename_grouped}_grouped'):
     dataset = Dataset.from_generator(stream_groupby_gen, 
                                      gen_kwargs={'dataset': dataset, 'id_key': id_key},
     ) # .with_format('numpy')
-    print("Grouping done, saving to disk")
-    dataset.save_to_disk(f'{output_path}{filename_grouped}_grouped')
+    print("Grouping done, splitting into train/test/val, and then saving to disk")
+    # Split the dataset into train and temp sets using the datasets library
+    train_test_split_ratio = 0.0002
+    train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=42)
+    train_dataset = train_val_test_split['train']
+    temp_dataset = train_val_test_split['test']
+
+    # Split the temp set into validation and test sets using the datasets library
+    val_test_split_ratio = 0.5
+    val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=42)
+    val_dataset = val_test_split['train']
+    test_dataset = val_test_split['test']
+
+    dataset_dict = DatasetDict({
+        'train': train_dataset,
+        'valid': val_dataset,
+        'test': test_dataset,
+    })
+
+    dataset_dict.save_to_disk(f'{output_path}{filename_grouped}_grouped')
 else:
     print(f"{filename_grouped} already grouped")
 

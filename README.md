@@ -7,10 +7,9 @@ The first model is a VAE, trained to compress discrete amino acid sequences to a
 
 The second model is a Diffusion Transformer (DiT), trained in this latent space, to be able to generate plausible protein sequences. (wip)
 
-First VAE (9.3) did not work well for a Diffusion model. I think the latent space was very hard for the diffusion model to understand. See 	
-parlancex's comment here for more information: https://news.ycombinator.com/item?id=39215949
+First VAE (9.3) did not work well for a Diffusion model. I think the latent space was very hard for the diffusion model to understand. See parlancex's comment here for more information: https://news.ycombinator.com/item?id=39215949
 
-In essence, the VAE needs to do perceptual compression - something which is is good at. For the semantic compression, we want this to be constained to the Diffusion process, whihc is way better at this, and might be even better in a more compressed latent space.
+In essence, the VAE needs to do perceptual compression - something which it is good at. For the semantic compression, we want this to be constained to the Diffusion process, which is way better at this, and might be even better in a more compressed latent space.
 
 ## License
 

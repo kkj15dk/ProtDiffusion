@@ -689,6 +689,17 @@ class VAETrainer:
             )
         else:
             raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')
+
+        # Create the output directory
+        if not os.path.exists(self.config.output_dir):
+            os.makedirs(self.config.output_dir, exist_ok=False)
+        elif not self.config.overwrite_output_dir:
+            raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
+        else:
+            raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
+            
+        if self.config.push_to_hub:
+            raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
         
         # Start the logging
         self.accelerator.init_trackers(
@@ -699,7 +710,7 @@ class VAETrainer:
         # Prepare everything
         # There is no specific order to remember, you just need to unpack the
         # objects in the same order you gave them to the prepare method.
-        ema = EMA(self.model, 
+        ema = EMA(model, 
                   beta = self.config.ema_decay, 
                   update_after_step = self.config.ema_update_after,
                   update_every = self.config.ema_update_every
@@ -713,17 +724,6 @@ class VAETrainer:
         self.pad_to_multiple_of = self.train_dataloader.dataset.pad_to_multiple_of
         self.seq_key = self.train_dataloader.dataset.sequence_key
         self.label_key = self.train_dataloader.dataset.label_key
-
-        # Create the output directory
-        if not os.path.exists(self.config.output_dir):
-            os.makedirs(self.config.output_dir, exist_ok=False)
-        elif not self.config.overwrite_output_dir:
-            raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
-        else:
-            raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
-            
-        if self.config.push_to_hub:
-            raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
 
     def get_kl_weight(self):
         if self.config.kl_schedule == 'constant_with_warmup':
@@ -913,7 +913,7 @@ class VAETrainer:
                     input = input_ids.to(self.accelerator.device)
                     attention_mask = attention_mask.to(self.accelerator.device)
 
-                    gather_n_tokens = self.accelerator.gather(torch.tensor(attention_mask.sum()))
+                    gather_n_tokens = self.accelerator.gather(attention_mask.sum())
 
                     # Forward pass
                     output = self.model(sample = input,

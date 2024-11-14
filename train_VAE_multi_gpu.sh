@@ -1,20 +1,20 @@
 #!/bin/sh 
 ### General options 
 ### -- specify queue -- 
-#BSUB -q gpua100
+#BSUB -q gpuv100
 ###BSUB -R "select[gpu32gb]"
 ### -- set the job Name -- 
-#BSUB -J train_VAE
+#BSUB -J train_VAE_multi
 ### -- ask for number of cores (default: 4) -- 
 #BSUB -n 8
 ### -- Select the resources: 1 gpu in exclusive process mode --
-#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -gpu "num=2:mode=exclusive_process"
 ### -- specify that the cores must be on the same host -- 
 #BSUB -R "span[hosts=1]"
 ### -- specify amount of memory per core/slot -- 
 #BSUB -R "rusage[mem=2GB]"
 ### -- set walltime limit: hh:mm -- 
-#BSUB -W 24:00
+#BSUB -W 00:10
 ### -- send notification at start -- 
 #BSUB -B
 ### -- send notification at completion -- 
@@ -30,4 +30,4 @@ module load python3/3.12.4
 source .venv/bin/activate
 
 # here follow the commands you want to execute
-accelerate launch --mixed_precision=fp16 --num_processes=1 ProtDiffusion/train_VAE.py
+accelerate launch --multi_gpu --mixed_precision=fp16 --num_processes=2 ProtDiffusion/train_VAE.py

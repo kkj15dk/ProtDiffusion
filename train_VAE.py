@@ -15,14 +15,14 @@ config = VAETrainingConfig(
     pad_to_multiple_of=8,
     gradient_accumulation_steps=2,
     optimizer = "AdamW",
-    learning_rate=1e-7,
+    learning_rate=4e-6,
     lr_warmup_steps=5000,
     lr_schedule='cosine_10x_decay',
     kl_warmup_steps=10000,
     kl_weight=1e-7, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
     kl_schedule='constant_with_restarts',
     save_image_model_steps=50000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v23.1_latent-2"), # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v23_single.1_latent-2"), # the model name locally and on the HF Hub
     total_checkpoints_limit=1, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0, # 5.0,
     max_len=1024, # 512 * 8 ((2**3))
@@ -35,8 +35,8 @@ config = VAETrainingConfig(
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
-# dataset = load_from_disk('/work3/s204514/UniRef50_splits')
-dataset = load_from_disk('datasets/UniRef50_grouped')
+dataset = load_from_disk('/work3/s204514/UniRef50_splits')
+# dataset = load_from_disk('datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test-bad?_grouped')
 dataset = dataset.shuffle(config.seed)
@@ -44,32 +44,32 @@ dataset = dataset.shuffle(config.seed)
 # %%
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
-# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
 
-# Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.0002
-train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
-train_dataset = train_val_test_split['train']
-temp_dataset = train_val_test_split['test']
+# # Split the dataset into train and temp sets using the datasets library
+# train_test_split_ratio = 0.0002
+# train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
+# train_dataset = train_val_test_split['train']
+# temp_dataset = train_val_test_split['test']
 
-# Split the temp set into validation and test sets using the datasets library
-val_test_split_ratio = 0.5
-val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
-val_dataset = val_test_split['train']
-test_dataset = val_test_split['test']
+# # Split the temp set into validation and test sets using the datasets library
+# val_test_split_ratio = 0.5
+# val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
+# val_dataset = val_test_split['train']
+# test_dataset = val_test_split['test']
 
-# dataset_dict = DatasetDict({
-#     'train': train_dataset,
-#     'valid': val_dataset,
-#     'test': test_dataset,
-# })
+# # dataset_dict = DatasetDict({
+# #     'train': train_dataset,
+# #     'valid': val_dataset,
+# #     'test': test_dataset,
+# # })
 
-# dataset_dict.save_to_disk('/work3/s204514/UniRef50_splits')
+# # dataset_dict.save_to_disk('/work3/s204514/UniRef50_splits')
 
-# train_dataset = dataset['train']
-# val_dataset = dataset['valid']
-# test_dataset = dataset['test']
+train_dataset = dataset['train']
+val_dataset = dataset['valid']
+test_dataset = dataset['test']
 
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
@@ -78,8 +78,8 @@ print(f"Test dataset length: {len(test_dataset)}")
 
 # %%
 print("num cpu cores:", os.cpu_count())
-print("setting num_workers to 16")
-num_workers = 16
+print("setting num_workers to 8")
+num_workers = 8
 
 train_dataloader = make_clustered_dataloader(config.batch_size,
                                              config.mega_batch,

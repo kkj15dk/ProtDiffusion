@@ -1,8 +1,8 @@
 #!/bin/sh 
 ### General options 
 ### -- specify queue -- 
-#BSUB -q gpuv100
-#BSUB -R "select[gpu32gb]"
+#BSUB -q gpua100
+###BSUB -R "select[gpu32gb]"
 ### -- set the job Name -- 
 #BSUB -J train_VAE
 ### -- ask for number of cores (default: 4) -- 

@@ -691,15 +691,16 @@ class VAETrainer:
             raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')
 
         # Create the output directory
-        if not os.path.exists(self.config.output_dir):
-            os.makedirs(self.config.output_dir, exist_ok=False)
-        elif not self.config.overwrite_output_dir:
-            raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
-        else:
-            raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
-            
-        if self.config.push_to_hub:
-            raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
+        if self.accelerator.is_main_process:
+            if not os.path.exists(self.config.output_dir):
+                os.makedirs(self.config.output_dir, exist_ok=False)
+            elif not self.config.overwrite_output_dir:
+                raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
+            else:
+                raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
+                
+            if self.config.push_to_hub:
+                raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
         
         # Start the logging
         self.accelerator.init_trackers(
@@ -884,12 +885,12 @@ class VAETrainer:
                 starting_epoch = self.training_variables.global_step // len(self.train_dataloader)
                 batches_to_skip = self.training_variables.global_step % len(self.train_dataloader)
                 skipped_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, batches_to_skip)
-                print(f"Loaded checkpoint from {from_checkpoint}")
-                print(f"Starting from epoch {starting_epoch}")
-                print(f"Starting from step {self.training_variables.global_step}")
-                print(f"Skipping {batches_to_skip} batches (randomly)")
-                print(f"Current validation loss: {self.training_variables.val_loss}")
-                print(f"Current max length: {self.training_variables.max_len_start}")
+                self.accelerator.print(f"Loaded checkpoint from {from_checkpoint}")
+                self.accelerator.print(f"Starting from epoch {starting_epoch}")
+                self.accelerator.print(f"Starting from step {self.training_variables.global_step}")
+                self.accelerator.print(f"Skipping {batches_to_skip} batches (randomly)")
+                self.accelerator.print(f"Current validation loss: {self.training_variables.val_loss}")
+                self.accelerator.print(f"Current max length: {self.training_variables.max_len_start}")
 
         # Now you train the model
         self.model.train()
@@ -905,15 +906,16 @@ class VAETrainer:
 
             for step, batch in enumerate(dataloader):
 
-                input_ids = batch['input_ids']
-                attention_mask = batch['attention_mask']
-
                 # Gradient accumulation
                 with self.accelerator.accumulate(self.model):
+
+                    input_ids: torch.IntTensor = batch['input_ids']
+                    attention_mask: torch.BoolTensor = batch['attention_mask']
+
                     input = input_ids.to(self.accelerator.device)
                     attention_mask = attention_mask.to(self.accelerator.device)
 
-                    gather_n_tokens = self.accelerator.gather(attention_mask.sum())
+                    gather_n_tokens = self.accelerator.gather_for_metrics(attention_mask.sum(dim=-1))
 
                     # Forward pass
                     output = self.model(sample = input,
@@ -963,7 +965,6 @@ class VAETrainer:
                     self.update_max_len()
 
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
-                    self.accelerator.wait_for_everyone()
                     
                     logs = self.evaluate(self.ema.ema_model)
                     self.accelerator.log(logs, step=self.training_variables.global_step)

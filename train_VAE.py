@@ -22,7 +22,7 @@ config = VAETrainingConfig(
     kl_weight=1e-7, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
     kl_schedule='constant_with_restarts',
     save_image_model_steps=50000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_test"), # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v24.1_latent-2_multi"), # the model name locally and on the HF Hub
     total_checkpoints_limit=1, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0, # 5.0,
     max_len=1024, # 512 * 8 ((2**3))
@@ -35,8 +35,8 @@ config = VAETrainingConfig(
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
-# dataset = load_from_disk('/work3/s204514/UniRef50_splits')
-dataset = load_from_disk('datasets/UniRef50_grouped')
+dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
+# dataset = load_from_disk('datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test-bad?_grouped')
 dataset = dataset.shuffle(config.seed)
@@ -48,8 +48,8 @@ test_dataset = dataset['test']
 # %%
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
-# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
 
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")

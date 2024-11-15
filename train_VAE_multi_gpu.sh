@@ -6,7 +6,7 @@
 ### -- set the job Name -- 
 #BSUB -J train_VAE_multi
 ### -- ask for number of cores (default: 4) -- 
-#BSUB -n 8
+#BSUB -n 16
 ### -- Select the resources: 1 gpu in exclusive process mode --
 #BSUB -gpu "num=2:mode=exclusive_process"
 ### -- specify that the cores must be on the same host -- 
@@ -14,7 +14,7 @@
 ### -- specify amount of memory per core/slot -- 
 #BSUB -R "rusage[mem=2GB]"
 ### -- set walltime limit: hh:mm -- 
-#BSUB -W 00:10
+#BSUB -W 24:00
 ### -- send notification at start -- 
 #BSUB -B
 ### -- send notification at completion -- 

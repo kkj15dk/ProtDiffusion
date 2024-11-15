@@ -915,7 +915,7 @@ class VAETrainer:
                     input = input_ids.to(self.accelerator.device)
                     attention_mask = attention_mask.to(self.accelerator.device)
 
-                    n_tokens = self.accelerator.gather_for_metrics(attention_mask.sum(dim=-1))
+                    gather_n_tokens = self.accelerator.gather_for_metrics(attention_mask.sum(dim=-1))
 
                     # Forward pass
                     output = self.model(sample = input,

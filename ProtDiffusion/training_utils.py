@@ -900,6 +900,7 @@ class VAETrainer:
 
         # Now you train the model
         self.model.train()
+        n_tokens = 0
         for epoch in range(starting_epoch, self.config.num_epochs):
 
             if epoch == starting_epoch:
@@ -921,7 +922,7 @@ class VAETrainer:
                     input = input_ids.to(self.accelerator.device)
                     attention_mask = attention_mask.to(self.accelerator.device)
 
-                    gather_n_tokens = self.accelerator.gather_for_metrics(attention_mask.sum(dim=-1))
+                    n_tokens += attention_mask.sum()
 
                     # Forward pass
                     output = self.model(sample = input,
@@ -940,9 +941,8 @@ class VAETrainer:
 
                     # Gradient clipping and gradient scaling for gradient accumulation with different length batches
                     if self.accelerator.sync_gradients:
-                        n_tokens = gather_n_tokens.sum()
                         self.scale_gradients(self.model, n_tokens)
-                        gather_n_tokens = None
+                        n_tokens = 0
                         if self.config.gradient_clip_val is not None:
                             self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
 

@@ -96,7 +96,7 @@ class Upsample1D(nn.Module):
         if self.use_conv_transpose and self.use_conv:
             raise ValueError("Only one of use_conv or use_conv_transpose can be True.")
         if self.use_conv_transpose:
-            self.conv = nn.ConvTranspose1d(channels, self.out_channels, 4, 2, 1)
+            self.conv = nn.ConvTranspose1d(self.channels, self.out_channels, 4, 2, 1)
         elif self.use_conv:
             self.conv = nn.Conv1d(self.channels, self.out_channels, 3, padding=1)
 

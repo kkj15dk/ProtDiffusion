@@ -258,6 +258,7 @@ def make_clustered_dataloader(batch_size: int,
                               num_workers: int = 1,
                               seed: int = 42,
                               shuffle: bool = True,
+                              random_padding: bool = False,
 ) -> DataLoader:
 
     sampler = BatchSampler(dataset,
@@ -274,6 +275,7 @@ def make_clustered_dataloader(batch_size: int,
                            num_workers=num_workers,
                            seed=seed,
                            shuffle=shuffle,
+                           random_padding=random_padding,
     )
 
     clustered_dataset = ClusteredDataset(dataset, 
@@ -415,6 +417,7 @@ class BatchSampler(Sampler):
                  num_workers: int = 1,
                  seed: int = 42,
                  shuffle: bool = True,
+                 random_padding: bool = False, # wheter to pad randomly on either side, or just right padding
     ):
         self.tokenizer = tokenizer
         self.batch_size = batch_size
@@ -429,6 +432,7 @@ class BatchSampler(Sampler):
         self.dataset = dataset
         self.num_workers = num_workers
         self.seed = seed
+        self.random_padding = random_padding
         if shuffle:
             self.generator = torch.Generator().manual_seed(seed)
         else:
@@ -451,9 +455,11 @@ class BatchSampler(Sampler):
         len_diff = seq_len - len(sequence)
         if len_diff == 0:
             return sequence
-        rand_int = torch.randint(0, len_diff, (1,), generator=self.generator).item()
-        sequence = pad_token * rand_int + sequence + pad_token * (len_diff - rand_int)
-
+        if self.random_padding:
+            rand_int = torch.randint(0, len_diff, (1,), generator=self.generator).item()
+            sequence = pad_token * rand_int + sequence + pad_token * (len_diff - rand_int)
+        else:
+            sequence = sequence + pad_token * len_diff
         return sequence
 
     def collate_fn(self, batch):

@@ -44,7 +44,7 @@ dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 # dataset = load_from_disk('/work3/s204514/ACP_grouped')
 # dataset = load_from_disk('/work3/s204514/PKSs_grouped')
 # dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
-train_dataset = dataset.shuffle(config.seed)
+dataset = dataset.shuffle(config.seed)
 
 # %%
 # Get pretrained models
@@ -54,18 +54,9 @@ tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/Pro
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # vae = AutoencoderKL1D.from_pretrained('/work3/s204514/protein-VAE-UniRef50_v9.3/pretrained/EMA')
 
-# Split the dataset into train and temp sets using the datasets library
-train_test_split_ratio = 0.01
-train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=config.seed)
-train_dataset = train_val_test_split['train']
-# temp_dataset = train_val_test_split['test']
-val_dataset = train_val_test_split['test']
-
-# # Split the temp set into validation and test sets using the datasets library
-# val_test_split_ratio = 0.5
-# val_test_split = temp_dataset.train_test_split(test_size=val_test_split_ratio, seed=config.seed)
-# val_dataset = val_test_split['train']
-# test_dataset = val_test_split['test']
+train_dataset = dataset['train']
+val_dataset = dataset['validation']
+test_dataset = dataset['test']
 
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")

@@ -8,6 +8,33 @@ from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
 
 import os
 
+# # latent 2
+# config = VAETrainingConfig(
+#     num_epochs=12, # the number of epochs to train for
+#     batch_size=128, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
+#     mega_batch=240,
+#     pad_to_multiple_of=8,
+#     gradient_accumulation_steps=2,
+#     optimizer = "AdamW",
+#     learning_rate=4e-6,
+#     lr_warmup_steps=10000,
+#     lr_schedule='cosine_10x_decay',
+#     kl_warmup_steps=20000,
+#     kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
+#     kl_schedule='constant_with_warmup',
+#     save_image_model_steps=100000,
+#     output_dir=os.path.join("output","protein-VAE-UniRef50_v25.1_latent-2_conv_transpose"), # the model name locally and on the HF Hub
+#     total_checkpoints_limit=1, # the maximum number of checkpoints to keep
+#     gradient_clip_val=1.0, # 5.0,
+#     max_len=1024, # 512 * 8 ((2**3))
+#     max_len_start=256,
+#     max_len_doubling_steps=1000000,
+#     ema_decay=0.99,
+#     ema_update_after=10000,
+#     ema_update_every=100,
+# )
+
+# latent 4
 config = VAETrainingConfig(
     num_epochs=12, # the number of epochs to train for
     batch_size=64, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
@@ -22,7 +49,7 @@ config = VAETrainingConfig(
     kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
     kl_schedule='constant_with_warmup',
     save_image_model_steps=100000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v24.4_latent-4_conv_transpose"), # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v24.5_latent-4_conv_transpose"), # the model name locally and on the HF Hub
     total_checkpoints_limit=1, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0, # 5.0,
     max_len=2048, # 512 * 8 ((2**3))
@@ -39,10 +66,9 @@ dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 # dataset = load_from_disk('datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test-bad?_grouped')
-dataset = dataset.shuffle(config.seed)
+dataset = dataset.shuffle(config.seed + 6) # for 6th epoch
 
 train_dataset = dataset['train']
-train_dataset = train_dataset.shuffle(config.seed + 1) # shuffe again for restart
 val_dataset = dataset['valid']
 test_dataset = dataset['test']
 
@@ -136,4 +162,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/protein-VAE-UniRef50_v24.2_latent-4_conv_transpose/checkpoints/checkpoint_17')
+    Trainer.train(from_pretrained='/zhome/fb/0/155603/output/protein-VAE-UniRef50_v24.4_latent-4_conv_transpose/Epoch_6')

@@ -1192,7 +1192,6 @@ class ProtDiffusionTrainer:
             if p.requires_grad and p.grad is not None:
                 p.grad.data = p.grad.data / n_tokens
 
-
     def logitnorm(self, bs: int, m: int, s: int, generator: Optional[torch.Generator] = None) -> torch.Tensor: # TODO: fix bug. This is wrongfully implemented
         '''
         draw random samples from a logitnormal distribution. https://arxiv.org/pdf/2403.03206

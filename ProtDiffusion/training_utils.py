@@ -412,7 +412,7 @@ class BatchSampler(Sampler):
                  length_key: str = 'length',
                  label_key: str = 'label',
                  sequence_key: str = 'input_ids',
-                 pad_to_multiple_of: int = 16,
+                 pad_to_multiple_of: int = 8,
                  drop_last: bool = True,
                  num_workers: int = 1,
                  seed: int = 42,
@@ -500,7 +500,7 @@ class BatchSampler(Sampler):
             seq = item[self.sequence_key]
             seq = str(seq, encoding='utf-8')
             seq = self.process_sequence(seq)
-            seq_len = item[self.length_key]
+            seq_len = length_list[i] # make sure to get the processed seq_ltngth - meaning what it is after tokenization
 
             if seq_len > max_len:
                 index = torch.randint(0, seq_len - max_len, (1,), generator=self.generator).item()

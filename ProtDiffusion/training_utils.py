@@ -474,7 +474,7 @@ class BatchSampler(Sampler):
 
         # assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertion on the dataset level.
 
-        length_list = [item[self.length_key] for item in batch]
+        length_list = [round_length(item[self.length_key], pad = 2, rounding = self.pad_to_multiple_of) for item in batch]
         sample_max_len = max(length_list)
         max_length_cap = self.max_length
 

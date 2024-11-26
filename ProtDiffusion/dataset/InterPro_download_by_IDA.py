@@ -9,14 +9,13 @@ from time import sleep
 # # Script to download all PKSs with a specific InterPro domain architecture (IDA) (with KS, AT and ACP. Without Adenylation domain, ABC transporter, choline acyltransferase, aminotransferase, PKS docking domain, NMO, or condensation domains) from InterPro.
 # IDA_API_URL = "https://www.ebi.ac.uk/interpro/api/entry/?ida_search=IPR014031%2CIPR014030%2CIPR014043%2CIPR009081&ida_ignore=IPR000873%2CPF00005%2CIPR039551%2CIPR004839%2CIPR015083%2CIPR004136%2CIPR001242"
 
-# phosphopantehteine attachment, ACP
+# phosphopantetheine attachment, ACP
 IDA_API_URL = "https://www.ebi.ac.uk/interpro/api/entry/?ida_search=IPR009081"
 
 BASE_URL_EUK = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2/?ida=" # Prokaryotic
 BASE_URL_PRO = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2759/?ida=" # Eukaryotic
 
 URL_EXTENSION = "&page_size=200&extra_fields=sequence"
-
 
 IDA_FILE = "ACP_IDA_IDs.txt"
 OUTPUT_FILE = "ACP.csv"
@@ -29,7 +28,6 @@ def get_ida_ids():
   next = IDA_API_URL
   last_page = False
 
-  
   attempts = 0
   while next:
     try:
@@ -101,6 +99,7 @@ def output_list(url, clusterid, familytaxonid):
       res = request.urlopen(req, context=context)
       # If the API times out due a long running query
       if res.status == 408:
+        print("408 error, waiting 61 seconds")
         # wait just over a minute
         sleep(61)
         # then continue this loop with the same URL
@@ -110,16 +109,19 @@ def output_list(url, clusterid, familytaxonid):
         break
       payload = json.loads(res.read().decode())
       next = payload["next"]
+      print("next: " + str(next))
       attempts = 0
       if not next:
         last_page = True
     except HTTPError as e:
       if e.code == 408:
+        print("408 error, waiting 61 seconds")
         sleep(61)
         continue
       else:
         # If there is a different HTTP error, it wil re-try 3 times before failing
         if attempts < 3:
+          print("HTTP error, waiting 61 seconds")
           attempts += 1
           sleep(61)
           continue
@@ -128,40 +130,16 @@ def output_list(url, clusterid, familytaxonid):
           raise e
 
     for i, item in enumerate(payload["results"]):
-      entries = None
-      if ("entry_subset" in item):
-        print("entry_subset!")
-        entries = item["entry_subset"]
-      elif ("entries" in item):
-        print("entries!")
-        entries = item["entries"]
-      
-      # if entries is not None:
-      #   entries_header = "-".join(
-      #     [entry["accession"] + "(" + ";".join(
-      #       [
-      #         ",".join(
-      #           [ str(fragment["start"]) + "..." + str(fragment["end"]) 
-      #             for fragment in locations["fragments"]]
-      #         ) for locations in entry["entry_protein_locations"]
-      #       ]
-      #     ) + ")" for entry in entries]
-      #   )
-      #   output_handle.write(">" + item["metadata"]["accession"] + HEADER_SEPARATOR
-      #                     + entries_header + HEADER_SEPARATOR
-      #                     + item["metadata"]["name"] + "\n")
-      # else:
-      # go_terms = [term for term in item["extra_fields"]["go_terms"] if term["identifier"] == "GO:0022857" or term["identifier"] == "GO:0055085"] # Transporters
-      # if go_terms:
-      #   print("Unwanted GO term found! in entry: " + item["metadata"]["accession"])
-      #   print([go_term["identifier"] for go_term in go_terms])
-      #   continue
+
       seq = item["extra_fields"]["sequence"]
       output_handle.write(clusterid + "," + item["metadata"]["accession"] + "," + familytaxonid + "," + seq + "\n")
-    
+
     # Don't overload the server, give it time before asking for more
     if next:
       sleep(1)
+    if last_page:
+      print("Last page of cluster " + clusterid + " reached for familytaxonid " + familytaxonid)
+      break
 
 if __name__ == "__main__":
   if os.path.isfile(IDA_FILE):
@@ -174,7 +152,7 @@ if __name__ == "__main__":
     sys.exit(errno.EEXIST)
   else:
     open(OUTPUT_FILE, 'a').close()
-  
+
   f = open(IDA_FILE, 'r')
   ida_ids = [id.rstrip('\n') for id in f.readlines()]
   with open(OUTPUT_FILE, "a")as output_handle:
@@ -183,7 +161,12 @@ if __name__ == "__main__":
     if id == "N/A":
       print("Missing id on line " + str(ida_ids.index(id)) + " continuing")
       continue
+    # eukaryotic
     url = BASE_URL_EUK + id + URL_EXTENSION
+    print("trying to get euk data for id: " + id)
     output_list(url, clusterid=id, familytaxonid="2759")
+
+    # prokaryotic
     url = BASE_URL_PRO + id + URL_EXTENSION
+    print("trying to get pro data for id: " + id)
     output_list(url, clusterid=id, familytaxonid="2")

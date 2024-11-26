@@ -62,11 +62,11 @@ config = VAETrainingConfig(
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
-dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
+# dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 # dataset = load_from_disk('datasets/UniRef50_grouped')
-# dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test-bad?_grouped')
-dataset = dataset.shuffle(config.seed + 6) # for 6th epoch
+dataset = dataset.shuffle(config.seed)
 
 train_dataset = dataset['train']
 val_dataset = dataset['valid']
@@ -75,8 +75,8 @@ test_dataset = dataset['test']
 # %%
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
-# tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
 
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
@@ -162,4 +162,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_pretrained='/zhome/fb/0/155603/output/protein-VAE-UniRef50_v24.4_latent-4_conv_transpose/Epoch_6')
+    Trainer.train()

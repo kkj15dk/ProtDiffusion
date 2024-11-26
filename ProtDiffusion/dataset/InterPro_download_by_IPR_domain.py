@@ -10,10 +10,13 @@ from time import sleep
 BASE_URL_EUK = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2" # Prokaryotic
 BASE_URL_PRO = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2759" # Eukaryotic
 
-# phosphopantehteine attachment, ACP
-URL_EXTENSION = "/entry/InterPro/IPR009081/?page_size=200&extra_fields=sequence"
+# ACP-like superfamily IPR036736
+URL_EXTENSION = "/entry/InterPro/IPR036736/?page_size=200&extra_fields=sequence"
+OUTPUT_FILE = "ACP_by_IPR036736.csv"
 
-OUTPUT_FILE = "ACP_by_IPR.csv"
+# # Alternatively use IPR009081 for ACP
+# URL_EXTENSION = "/entry/InterPro/IPR009081/?page_size=200&extra_fields=sequence"
+# OUTPUT_FILE = "ACP_by_IPR009081.csv"
 
 def output_list(output_handle, url, familytaxonid):
   #disable SSL verification to avoid config issues

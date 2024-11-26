@@ -10,20 +10,21 @@ from ProtDiffusion.training_utils import round_length
 # %%
 # Define the parameters
 sequence_key = 'sequence'
-id_key = 'cluster50id' # This is the column to group by
-label_key = 'familytaxonid'
+id_key = 'clusterid' # This is the column to group by
+label_key = 'domainid' # This is the column to use as the label
 output_path = '/home/kkj/ProtDiffusion/datasets/'
 # input_path = '/home/kkj/ProtDiffusion/datasets/UniRef50_sorted.csv' # Has to be sorted by id
-input_path = '/home/kkj/ProtDiffusion/datasets/UniRefALL_sorted.csv'
-filename_encoded = 'UniRefALL'
-filename_grouped = 'UniRef50'
+# input_path = '/home/kkj/ProtDiffusion/datasets/UniRefALL_sorted.csv'
+input_path = '/home/kkj/ProtDiffusion/datasets/90_IPR036736_sorted.csv'
+filename_encoded = 'IPR036736_90'
+filename_grouped = 'IPR036736_90'
 assert label_key != 'label', "label_key cannot be 'label', as it is used as a temporary column name, and deleted afterwards"
 
 # %%
 # Define the transformation function for batches
 def preprocess(example: dict,
                sequence_key: str = 'sequence', 
-               label_key: str = 'familytaxonid', 
+               label_key: str = 'domainid', 
 ):
     sequence = example[sequence_key]
     label = example[label_key]
@@ -95,12 +96,14 @@ if not os.path.exists(f'{output_path}{filename_encoded}'):
     # Load the dataset
     print(f"Loading {input_path}")
     dataset = load_dataset('csv', data_files=input_path)['train']
-
+    print(f"Loaded {input_path}")
+    print(f"Dataset length: {len(dataset)}")
+    
     # %%
-    dataset = dataset.rename_column(' kingdomid', 'familytaxonid')
-    dataset = dataset.rename_column(' sequence', 'sequence')
-    dataset = dataset.rename_column(' cluster90id', 'cluster90id')
-    dataset = dataset.rename_column(' cluster100id', 'cluster100id')
+    # dataset = dataset.rename_column(' kingdomid', 'domainid')
+    # dataset = dataset.rename_column(' sequence', 'sequence')
+    # dataset = dataset.rename_column(' cluster90id', 'cluster90id')
+    # dataset = dataset.rename_column(' cluster100id', 'cluster100id')
 
     # %%
     # filter so that only sequences with ACDEFGHIKLMNOPQRSTUVWY are included
@@ -129,7 +132,7 @@ if not os.path.exists(f'{output_path}{filename_grouped}_grouped'):
     ) # .with_format('numpy')
     print("Grouping done, splitting into train/test/val, and then saving to disk")
     # Split the dataset into train and temp sets using the datasets library
-    train_test_split_ratio = 0.0002
+    train_test_split_ratio = 0.02
     train_val_test_split = dataset.train_test_split(test_size=train_test_split_ratio, seed=42)
     train_dataset = train_val_test_split['train']
     temp_dataset = train_val_test_split['test']
@@ -156,4 +159,4 @@ print('Doen')
 # Load the grouped dataset
 dataset = load_from_disk(f'{output_path}{filename_grouped}_grouped')
 print(dataset)
-print(dataset[0])
+print(dataset['train'][0])

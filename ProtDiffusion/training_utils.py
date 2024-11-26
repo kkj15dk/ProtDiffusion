@@ -679,19 +679,19 @@ class VAETrainer:
             lr_scheduler = get_cosine_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+                num_training_steps=(len(train_dataloader) * config.num_epochs),
             )
         elif config.lr_schedule == 'cosine_10x_decay':
             lr_scheduler = get_cosine_10x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+                num_training_steps=(len(train_dataloader) * config.num_epochs),
             )
         elif config.lr_schedule == 'cosine_100x_decay':
             lr_scheduler = get_cosine_100x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+                num_training_steps=(len(train_dataloader) * config.num_epochs),
             )
         else:
             raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')
@@ -704,10 +704,10 @@ class VAETrainer:
                 raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
             else:
                 raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
-                
+
             if self.config.push_to_hub:
                 raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
-        
+
         # Start the logging
         self.accelerator.init_trackers(
             project_name=self.accelerator_config.logging_dir,
@@ -800,7 +800,7 @@ class VAETrainer:
             running_loss_ce += ce_loss.detach().item()
             running_loss_kl += kl_loss.detach().item()
             running_loss += loss.detach().item()
-            
+
             if i == 0 and self.accelerator.is_main_process: # save the first sample each evaluation as a logoplot
                 logoplot_sample = output.sample[0]
                 # remove the padding
@@ -1056,10 +1056,10 @@ class ProtDiffusionTrainingConfig:
 
         if not self.overwrite_output_dir and os.path.exists(self.output_dir):
             raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
-        
+
         if self.push_to_hub:
             raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
-        
+
         assert self.optimizer in ["AdamW", "Adam", "SGD", "Adamax"], "Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`"
         assert self.mixed_precision in ["no", "fp16"], "Invalid mixed precision setting, choose between `no` and `fp16`" # TODO: implement fully
         assert self.max_len % self.pad_to_multiple_of == 0, "The maximum length of the input sequence must be a multiple of the pad_to_multiple_of parameter."
@@ -1138,19 +1138,19 @@ class ProtDiffusionTrainer:
             lr_scheduler = get_cosine_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+                num_training_steps=(len(train_dataloader) * config.num_epochs),
             )
         elif config.lr_schedule == 'cosine_10x_decay':
             lr_scheduler = get_cosine_10x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+                num_training_steps=(len(train_dataloader) * config.num_epochs),
             )
         elif config.lr_schedule == 'cosine_100x_decay':
             lr_scheduler = get_cosine_100x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs // config.gradient_accumulation_steps),
+                num_training_steps=(len(train_dataloader) * config.num_epochs),
             )
         else:
             raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')

@@ -887,7 +887,10 @@ class VAETrainer:
                 self.training_variables.max_len_start = self.config.max_len_start
             else:
                 self.accelerator.load_state(input_dir=from_checkpoint)
-                # Skip the first batches
+                # self.lr_scheduler._initial_step()
+                # for step in self.training_variables.global_step:
+                #     self.lr_scheduler.step()
+                # # Skip the first batches
                 starting_epoch = self.training_variables.global_step // len(self.train_dataloader)
                 batches_to_skip = self.training_variables.global_step % len(self.train_dataloader)
                 skipped_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, batches_to_skip)

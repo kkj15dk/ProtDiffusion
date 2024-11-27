@@ -48,7 +48,7 @@ dataset = dataset.shuffle(config.seed)
 
 # %%
 # Get pretrained models
-vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/protein-VAE-UniRef50_v9.3/pretrained/EMA')
+vae = AutoencoderKL1D.from_pretrained('/zhome/fb/0/155603/output/protein-VAE-UniRef50_v24.7_latent-4_conv_transpose/pretrained/EMA')
 tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")
 # # Get pretrained models
 # tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.1")

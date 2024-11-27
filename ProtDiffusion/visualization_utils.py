@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import logomaker
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 from logomaker.src.colors import get_color_dict
 
@@ -68,3 +69,32 @@ def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIK
     gc.collect()  # Force garbage collection
 
     return
+
+# %%
+def latent_ax(ax: plt.Axes, 
+              latent: torch.Tensor, 
+              title: str, 
+              marker: str = 'o', 
+              cmap = cm.get_cmap('viridis'),
+              xlabel: str = 'Latent Dimension 1', 
+              ylabel: str = 'Latent Dimension 2',
+):
+    assert latent.ndim == 2
+    dims = latent.shape[0]
+    assert dims == 2
+    length = latent.shape[1]
+
+    ax.set_title(title)
+    ax.scatter(latent[0, :], latent[1, :], c=np.arange(length), marker=marker, cmap=cmap)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    return
+
+if __name__ == '__main__':
+    pass
+    # latent = torch.randn(2, 1024)
+    # fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+    # latent_ax(ax, latent, 'Test')
+    # plt.show()
+# %%

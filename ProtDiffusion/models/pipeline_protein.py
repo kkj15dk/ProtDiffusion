@@ -245,7 +245,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
            output = [seq[:, :seq_len[i]] for i, seq in enumerate(output)]
         elif output_type == "logits":
             output = vae_output
-            # output = [seq[:, :, :seq_len[i]] for i, seq in enumerate(output)] # TODO: make the abstraction better here. I use this in evaluate, and therefor need to not create a list yet.
+            # output = [seq[:, :, :seq_len[i]] for i, seq in enumerate(output)] # TODO: make the abstraction better here. I use this in evaluate, and therefore need to not create a list yet.
         elif output_type == "aa_seq":
             token_ids = logits_to_token_ids(vae_output, self.tokenizer, cutoff)
             output = self.tokenizer.batch_decode(token_ids)

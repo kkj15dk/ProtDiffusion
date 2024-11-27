@@ -163,7 +163,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         assert len(class_labels) == batch_size, "You have to give as many class_labels as batch_size"
 
         if class_labels is None:
-            class_labels = [self.transformer.num_classes] * batch_size # default to the last class, which is the calss corresponding to None
+            class_labels = [self.transformer.num_classes] * batch_size # default to the last class, which is the class corresponding to None
         for i in range(len(class_labels)): # Alternatively, use -1 to represent None
             if class_labels[i] == -1:
                 class_labels[i] = self.transformer.num_classes
@@ -174,9 +174,11 @@ class ProtDiffusionPipeline(DiffusionPipeline):
                 seq_len[i] = seq_len[i] + (self.vae.pad_to_multiple_of - seq_len[i] % self.vae.pad_to_multiple_of)
 
         latent_len = [len // self.vae.pad_to_multiple_of for len in seq_len]
+        max_latent_len = max(latent_len)
         latent_channels = self.transformer.config.in_channels
-        latent_shape = (batch_size, latent_channels, max(latent_len))
-        attention_mask = torch.zeros((batch_size, max(latent_len)), device=self._execution_device, dtype=torch.bool)
+        latent_shape = (batch_size, latent_channels, max_latent_len)
+        attention_mask = torch.zeros((batch_size, max_latent_len), device=self._execution_device, dtype=torch.bool)
+
         for i, length in enumerate(latent_len):
             attention_mask[i, :length] = 1
         class_labels = torch.tensor(class_labels, device=self._execution_device)

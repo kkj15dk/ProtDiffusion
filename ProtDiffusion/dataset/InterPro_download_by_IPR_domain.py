@@ -7,15 +7,20 @@ from urllib.error import HTTPError
 from time import sleep
 
 
-BASE_URL_EUK = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2" # Prokaryotic
-BASE_URL_PRO = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2759" # Eukaryotic
+BASE_URL_PRO = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2" # Prokaryotic
+BASE_URL_EUK = "https://www.ebi.ac.uk/interpro/wwwapi/protein/UniProt/taxonomy/uniprot/2759" # Eukaryotic
 
-# phosphopantehteine attachment, ACP
-URL_EXTENSION = "/entry/InterPro/IPR009081/?page_size=200&extra_fields=sequence"
+HEADER_SEPARATOR = "|"
 
-OUTPUT_FILE = "ACP_by_IPR.csv"
+# ACP-like superfamily IPR036736
+URL_EXTENSION = "/entry/InterPro/IPR036736/?page_size=200&extra_fields=sequence"
+OUTPUT_FILE = "IPR036736.csv"
 
-def output_list(output_handle, url, familytaxonid):
+# # Alternatively use IPR009081 for ACP
+# URL_EXTENSION = "/entry/InterPro/IPR009081/?page_size=200&extra_fields=sequence"
+# OUTPUT_FILE = "IPR009081.csv"
+
+def output_list(handle, url, kingdomid):
   #disable SSL verification to avoid config issues
   context = ssl._create_unverified_context()
 
@@ -34,7 +39,7 @@ def output_list(output_handle, url, familytaxonid):
         # then continue this loop with the same URL
         continue
       elif res.status == 204:
-        # no data so leave loop
+        #no data so leave loop
         break
       payload = json.loads(res.read().decode())
       next = payload["next"]
@@ -56,15 +61,16 @@ def output_list(output_handle, url, familytaxonid):
           raise e
 
     for i, item in enumerate(payload["results"]):
-      entries = None
-      if ("entry_subset" in item):
-        entries = item["entry_subset"]
-      elif ("entries" in item):
-        entries = item["entries"]
       
+      handle.write(">" + item["metadata"]["accession"] + HEADER_SEPARATOR + kingdomid + HEADER_SEPARATOR + item["metadata"]["name"] + "\n")
+
       seq = item["extra_fields"]["sequence"]
-      output_handle.write(item["metadata"]["accession"] + "," + familytaxonid + "," + seq + "\n")
-    
+      # fastaSeqFragments = [seq[0+i:LINE_LENGTH+i] for i in range(0, len(seq), LINE_LENGTH)]
+      # for fastaSeqFragment in fastaSeqFragments:
+      #   handle.write(fastaSeqFragment + "\n")
+
+      handle.write(seq + "\n")
+      
     # Don't overload the server, give it time before asking for more
     if next:
       sleep(1)
@@ -78,9 +84,8 @@ if __name__ == "__main__":
     open(OUTPUT_FILE, 'a').close()
   
   with open(OUTPUT_FILE, "a") as output_handle:
-    output_handle.write("proteinid,familytaxonid,sequence\n")
 
     url = BASE_URL_EUK + URL_EXTENSION
-    output_list(output_handle, url, familytaxonid="2759")
+    output_list(output_handle, url, kingdomid="2759")
     url = BASE_URL_PRO + URL_EXTENSION
-    output_list(output_handle, url, familytaxonid="2")
+    output_list(output_handle, url, kingdomid="2")

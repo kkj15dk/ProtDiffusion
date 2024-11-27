@@ -35,7 +35,7 @@ from tqdm import tqdm
 
 import ot
 
-from .models.autoencoder_kl_1d import AutoencoderKL1D
+from .models.autoencoder_kl_1d import AutoencoderKL1D, AutoencoderKLOutput1D
 from .models.vae import EncoderKLOutput1D
 from .models.dit_transformer_1d import DiTTransformer1DModel, Transformer1DModelOutput
 from .models.pipeline_protein import ProtDiffusionPipeline, logits_to_token_ids
@@ -197,7 +197,7 @@ def count_parameters(model):
 
 def round_length(length: int, pad: int = 2, rounding: int = 16) -> int:
     '''
-    Round the length to the nearest multiple of 16.
+    Round the length to what it will be after processing by the tokenization process.
     '''
     return int(np.ceil((length + pad) / rounding) * rounding)
 
@@ -412,7 +412,7 @@ class BatchSampler(Sampler):
                  length_key: str = 'length',
                  label_key: str = 'label',
                  sequence_key: str = 'input_ids',
-                 pad_to_multiple_of: int = 16,
+                 pad_to_multiple_of: int = 8,
                  drop_last: bool = True,
                  num_workers: int = 1,
                  seed: int = 42,
@@ -474,7 +474,7 @@ class BatchSampler(Sampler):
 
         # assert all(item[self.length_key] % self.pad_to_multiple_of == 0 for item in batch), "The length_key values of the sequences must be a multiple of the pad_to_multiple_of parameter." #TODO: Could be commented out and made an assertion on the dataset level.
 
-        length_list = [item[self.length_key] for item in batch]
+        length_list = [round_length(item[self.length_key], pad = 2, rounding = self.pad_to_multiple_of) for item in batch]
         sample_max_len = max(length_list)
         max_length_cap = self.max_length
 
@@ -500,7 +500,7 @@ class BatchSampler(Sampler):
             seq = item[self.sequence_key]
             seq = str(seq, encoding='utf-8')
             seq = self.process_sequence(seq)
-            seq_len = item[self.length_key]
+            seq_len = length_list[i] # make sure to get the processed seq_ltngth - meaning what it is after tokenization
 
             if seq_len > max_len:
                 index = torch.randint(0, seq_len - max_len, (1,), generator=self.generator).item()
@@ -922,19 +922,16 @@ class VAETrainer:
                     input_ids: torch.IntTensor = batch['input_ids']
                     attention_mask: torch.BoolTensor = batch['attention_mask']
 
-                    input = input_ids.to(self.accelerator.device)
-                    attention_mask = attention_mask.to(self.accelerator.device)
-
                     n_tokens += attention_mask.sum()
 
                     # Forward pass
-                    output = self.model(sample = input,
+                    output: AutoencoderKLOutput1D = self.model(sample = input_ids,
                                         attention_mask = attention_mask,
                                         sample_posterior = True, # Should be set to true in training
                     )
 
                     # Loss calculation
-                    ce_loss, kl_loss = self.model.loss_fn(output, input)
+                    ce_loss, kl_loss = self.model.loss_fn(output, input_ids)
                     kl_weight = self.get_kl_weight()
                     loss = ce_loss + kl_loss * kl_weight
                     loss_back = loss * attention_mask.sum() # https://www.reddit.com/r/MachineLearning/comments/1acbzrx/d_gradient_accumulation_should_not_be_used_with/
@@ -1099,13 +1096,16 @@ class ProtDiffusionTrainer:
         elif isinstance(noise_scheduler, FlowMatchingEulerScheduler):
             self.flow = True
             self.diffusion = False
+        self.tokenizer = tokenizer
+        self.config = config
 
         self.eval_seq_len = eval_seq_len
+        assert isinstance(eval_seq_len, (int, list)), "The evaluation sequence length should be an integer or a list of integers"
+        assert all(seq_len <= self.config.max_len for seq_len in eval_seq_len), "The evaluation sequence length must not be greater than the maximum sequence length"
+
         self.eval_class_labels = eval_class_labels
         self.eval_guidance_scale = eval_guidance_scale
         self.eval_num_inference_steps = eval_num_inference_steps
-        self.tokenizer = tokenizer
-        self.config = config
         self.training_variables = training_variables or TrainingVariables()
         self.accelerator_config = ProjectConfiguration(
             project_dir=self.config.output_dir,
@@ -1157,12 +1157,35 @@ class ProtDiffusionTrainer:
             )
         else:
             raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')
-
+        
+        # Create the output directory
+        if self.accelerator.is_main_process:
+            if not os.path.exists(self.config.output_dir):
+                os.makedirs(self.config.output_dir, exist_ok=False)
+            elif not self.config.overwrite_output_dir:
+                raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
+            else:
+                raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
+                
+            if self.config.push_to_hub:
+                raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
+        
+        # Start the logging
+        self.accelerator.init_trackers(
+            project_name=self.accelerator_config.logging_dir,
+            config=vars(self.config),
+        )
+        
         # Prepare everything
         # There is no specific order to remember, you just need to unpack the
         # objects in the same order you gave them to the prepare method.
-        self.transformer, self.vae, self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
-            transformer, vae, optimizer, train_dataloader, lr_scheduler
+        ema = EMA(transformer, 
+                  beta = self.config.ema_decay, 
+                  update_after_step = self.config.ema_update_after,
+                  update_every = self.config.ema_update_every
+        )
+        self.transformer, self.ema, self.vae, self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
+            transformer, ema, vae, optimizer, train_dataloader, lr_scheduler
         )
         if test_dataloader is not None:
             self.test_dataloader: DataLoader = self.accelerator.prepare(test_dataloader)
@@ -1207,7 +1230,7 @@ class ProtDiffusionTrainer:
         samples = 1 / (1 + torch.exp(-rand))
         return samples
 
-    def get_timesteps(self, bs: int, generator: Optional[torch.Generator] = None) -> torch.Tensor:
+    def sample_timesteps(self, bs: int, generator: Optional[torch.Generator] = None) -> torch.Tensor:
         
         '''
         Get the timesteps for the diffusion or flow matching training.
@@ -1309,7 +1332,7 @@ class ProtDiffusionTrainer:
             attention_mask = attention_mask.to(self.accelerator.device)
 
             # Forward pass
-            output = model(hidden_states = noisy_latent,
+            output: torch.Tensor = model(hidden_states = noisy_latent,
                            attention_mask = attention_mask,
                            timestep = timesteps,
                            class_labels = label,
@@ -1317,9 +1340,8 @@ class ProtDiffusionTrainer:
             
             # Loss calculation
             loss = self.loss(output, latent, noise, attention_mask)
+            running_loss += loss.detach().item()
 
-            # Log the progress
-            running_loss += loss.item()
             progress_bar.update(1)
 
         val_loss = running_loss / len(dataloader)
@@ -1341,38 +1363,38 @@ class ProtDiffusionTrainer:
                           guidance_scale=self.eval_guidance_scale,
                           num_inference_steps=self.eval_num_inference_steps,
                           generator=None,
-                          output_type='aa_seq',
+                          output_type='logits', # aa_seq
         )
-        # logits = output.seqs
-        seqs_pred = output.seqs
+        logits = output.seqs
+        # seqs_pred = output.seqs
 
-        # # make a logoplot of the first sample
-        # logoplot_sample = logits[0]
-        # # remove the padding
-        # logoplot_sample_len = seqs_lens[0]
-        # logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
-        # logoplot_sample_cl = class_labels[0]
-        # probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
-        # pool = mp.Pool(1)
-        # pool.apply_async(make_logoplot, 
-        #                 args=(
-        #                     probs, 
-        #                     name, 
-        #                     f"{test_dir}/{name}_length_{logoplot_sample_len}_class_label_{logoplot_sample_cl}_inference_steps_{self.eval_num_inference_steps}.png", 
-        #                     self.tokenizer.decode(range(self.tokenizer.vocab_size)),
-        #                 ),
-        #                 error_callback=lambda e: print(e),
-        #                 callback=lambda _: pool.close(),
-        # )
-        # # gc.collect()
+        # make a logoplot of the first sample
+        logoplot_sample = logits[0]
+        # remove the padding
+        logoplot_sample_len = seqs_lens[0]
+        logoplot_sample = logoplot_sample[:,:logoplot_sample_len]
+        logoplot_sample_cl = class_labels[0]
+        probs = F.softmax(logoplot_sample, dim=0).cpu().numpy()
+        pool = mp.Pool(1)
+        pool.apply_async(make_logoplot, 
+                        args=(
+                            probs, 
+                            name, 
+                            f"{test_dir}/{name}_length_{logoplot_sample_len}_class_label_{logoplot_sample_cl}_inference_steps_{self.eval_num_inference_steps}.png", 
+                            self.tokenizer.decode(range(self.tokenizer.vocab_size)),
+                        ),
+                        error_callback=lambda e: print(e),
+                        callback=lambda _: pool.close(),
+        )
+        # gc.collect()
 
-        # token_ids_pred = logits_to_token_ids(logits, self.tokenizer, cutoff=self.config.cutoff)
+        token_ids_pred = logits_to_token_ids(logits, self.tokenizer, cutoff=self.config.cutoff)
 
-        # # Decode the predicted sequences, and remove zero padding
-        # seqs_pred = self.tokenizer.batch_decode(token_ids_pred, skip_special_tokens=self.config.skip_special_tokens)
+        # Decode the predicted sequences, and remove zero padding
+        seqs_pred = self.tokenizer.batch_decode(token_ids_pred, skip_special_tokens=self.config.skip_special_tokens)
 
-        # # Remove the padding from the sequences
-        # seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
+        # Remove the padding from the sequences
+        seqs_pred = [seq[:i] for seq, i in zip(seqs_pred, seqs_lens)]
 
         # Save all samples as a FASTA file
         seq_record_list = [SeqRecord(Seq(seq), id=str(seqs_lens[i]), 
@@ -1383,45 +1405,14 @@ class ProtDiffusionTrainer:
         with open(f"{test_dir}/{name}.fa", "a") as f:
             SeqIO.write(seq_record_list, f, "fasta")
         
-        # print(f"{name}, val_loss: {log_loss:.4f}, val_accuracy: {acc:.4f}")
-        # logs = {"val_loss": log_loss, 
-        #         "val_ce_loss": log_loss_ce, 
-        #         "val_kl_loss": log_loss_kl,
-        #         "val_acc": acc,
-        #         }
         gc.collect()
-        print(f"Evaluation done {name}")
+        print(f"Inference test done: {name}")
         return
 
     def train(self, from_checkpoint: Optional[Union[str, os.PathLike]] = None):
 
         # start the loop
-        if self.accelerator.is_main_process:
-            self.ema = EMA(self.transformer, 
-                           beta = self.config.ema_decay, 
-                           update_after_step = self.config.ema_update_after,
-                           update_every = self.config.ema_update_every
-            )
-            self.ema.to(self.accelerator.device)
-            self.accelerator.register_for_checkpointing(self.ema)
-
-            # Create the output directory
-            if not os.path.exists(self.config.output_dir):
-                os.makedirs(self.config.output_dir, exist_ok=False)
-            elif not self.config.overwrite_output_dir:
-                raise ValueError("Output directory already exists. Set `config.overwrite_output_dir` to `True` to overwrite it.")
-            else:
-                raise NotImplementedError(f'Overwriting the output directory {self.config.output_dir} is not implemented yet, please delete the directory manually.')
-                
-            if self.config.push_to_hub:
-                raise NotImplementedError("Pushing to the HF Hub is not implemented yet")
-            
-            # Start the logging
-            self.accelerator.init_trackers(
-                project_name=self.accelerator_config.logging_dir,
-                config=vars(self.config),
-            )
-
+        if self.accelerator.is_local_main_process:
             # load the checkpoint if it exists
             if from_checkpoint is None:
                 skipped_dataloader = self.train_dataloader
@@ -1457,40 +1448,38 @@ class ProtDiffusionTrainer:
 
             for step, batch in enumerate(dataloader):
 
-                input_ids = batch['input_ids']
-                attention_mask = batch['attention_mask']
-
-                vae_encoded = self.vae.encode(x = input_ids,
-                                              attention_mask = attention_mask,
-                )
-
-                attention_mask = vae_encoded.attention_masks[-1]
-                latent = vae_encoded.latent_dist.sample() # Mode is deterministic TODO: .sample() or .mode()?
-                label = batch['label']
-
-                # Sample noise to add to the images
-                noise = torch.randn(latent.shape, device=latent.device)
-                if self.config.use_batch_optimal_transport:
-                    noise = reorder_noise_for_OT(latent, noise)
-                
-                noise = noise * attention_mask.unsqueeze(1) # Mask the noise
-                bs = latent.shape[0]
-
-                # Sample a random timestep for each latent
-                timesteps = self.get_timesteps(bs)
-
-                # Add noise to the clean images according to the noise magnitude at each timestep
-                noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
-
                 # Gradient accumulation
                 with self.accelerator.accumulate(self.transformer):
-                    noisy_latent = noisy_latent.to(self.accelerator.device)
-                    attention_mask = attention_mask.to(self.accelerator.device)
+                    
+                    input_ids: torch.IntTensor = batch['input_ids']
+                    attention_mask: torch.BoolTensor = batch['attention_mask']
+                    label: torch.IntTensor = batch['label']
+
+                    vae_encoded: EncoderKLOutput1D = self.vae.encode(x = input_ids,
+                                                attention_mask = attention_mask,
+                    )
+
+                    attention_mask = vae_encoded.attention_masks[-1]
+                    latent = vae_encoded.latent_dist.sample() # Mode is deterministic TODO: .sample() or .mode()?
 
                     n_tokens += attention_mask.sum()
 
+                    # Sample noise to add to the images
+                    noise = torch.randn(latent.shape, device=latent.device)
+                    if self.config.use_batch_optimal_transport:
+                        noise = reorder_noise_for_OT(latent, noise)
+                    
+                    noise = noise * attention_mask.unsqueeze(1) # Mask the noise
+                    bs = latent.shape[0]
+
+                    # Sample a random timestep for each latent
+                    timesteps = self.sample_timesteps(bs)
+
+                    # Add noise to the clean images according to the noise magnitude at each timestep
+                    noisy_latent = self.noise_scheduler.add_noise(latent, noise, timesteps)
+
                     # Forward pass
-                    output = self.transformer(hidden_states = noisy_latent,
+                    output: torch.Tensor = self.transformer(hidden_states = noisy_latent,
                                               attention_mask = attention_mask,
                                               timestep = timesteps,
                                               class_labels = label,
@@ -1534,13 +1523,13 @@ class ProtDiffusionTrainer:
                 # Evaluation and saving the model
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
                     
-            ### My RAM gats eaten somewhere here
+            ### My RAM gets eaten somewhere here
                     # Test of inference using the EMA model
                     self.accelerator.wait_for_everyone()
                     if self.accelerator.is_main_process:
                         pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.ema.ema_model), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
                         self.inference_test(pipeline)
-            ### My RAM gats eaten somewhere here
+            ### My RAM gets eaten somewhere here
 
                     # Evaluation
                     self.accelerator.wait_for_everyone()
@@ -1558,13 +1547,13 @@ class ProtDiffusionTrainer:
             torch.cuda.empty_cache()
             if self.config.save_every_epoch:
 
-            ### My RAM gats eaten somewhere here
+            ### My RAM gets eaten somewhere here
                 # Test of inference using the MSE model every epoch
                 self.accelerator.wait_for_everyone()
                 if self.accelerator.is_main_process:
                     pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
                     self.inference_test(pipeline)
-            ### My RAM gats eaten somewhere here
+            ### My RAM gets eaten somewhere here
 
                 # Evaluation
                 self.accelerator.wait_for_everyone()

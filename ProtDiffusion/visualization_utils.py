@@ -28,7 +28,7 @@ def make_color_dict(color_scheme:str = 'weblogo_protein', cs:str = "-[]ACDEFGHIK
 
 # %%
 @torch.no_grad()
-def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY", positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 50):
+def make_logoplot(array: np.ndarray, label:str, png_path:str, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY", positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 50):
     assert array.ndim == 2
 
     amino_acids = list(characters)
@@ -74,6 +74,7 @@ def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIK
 def latent_ax(ax: plt.Axes, 
               latent: torch.Tensor, 
               title: str, 
+              s: int = 20,
               marker: str = 'o', 
               cmap = cm.get_cmap('viridis'),
               xlabel: str = 'Latent Dimension 1', 
@@ -81,13 +82,16 @@ def latent_ax(ax: plt.Axes,
 ):
     assert latent.ndim == 2
     dims = latent.shape[0]
-    assert dims == 2
+    assert dims == 2, "Latent tensor must have 2 dimensions, not {}".format(dims)
     length = latent.shape[1]
 
     ax.set_title(title)
-    ax.scatter(latent[0, :], latent[1, :], c=np.arange(length), marker=marker, cmap=cmap)
+    ax.scatter(latent[0, :], latent[1, :], s=s, c=np.arange(length), marker=marker, cmap=cmap)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+    ax.grid(True)
+    ax.set_ylim(-3, 3)
+    ax.set_xlim(-3, 3)
 
     return
 

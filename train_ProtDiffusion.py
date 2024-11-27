@@ -110,7 +110,7 @@ transformer = DiTTransformer1DModel(
 count_parameters(transformer) # Count the parameters of the model and print
 
 # %%
-noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
+noise_scheduler = DDPMScheduler(num_train_timesteps=1000, clip_sample=False)
 # noise_scheduler = FlowMatchingEulerScheduler(num_inference_steps=100)
 
 Trainer = ProtDiffusionTrainer(transformer=transformer,

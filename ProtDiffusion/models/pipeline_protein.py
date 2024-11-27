@@ -31,7 +31,7 @@ from transformers import PreTrainedTokenizerFast
 from .dit_transformer_1d import DiTTransformer1DModel, Transformer1DModelOutput
 from .autoencoder_kl_1d import AutoencoderKL1D
 from ..schedulers.FlowMatchingEulerScheduler import FlowMatchingEulerScheduler
-from ..visualization_utils import latent_ax
+from ..visualization_utils import latent_ax, make_color_dict
 
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
@@ -39,6 +39,8 @@ from Bio import SeqIO
 
 import os
 import matplotlib.pyplot as plt
+import logomaker
+import pandas as pd
 
 @dataclass
 class ProteinPipelineOutput(BaseOutput):
@@ -212,14 +214,13 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         # If return_hidden_states, save the hidden latents at each timestep
         if return_hidden_latents:
             hidden_latents = []
-            hidden_latents.append(latents)
+            hidden_latents.append(latents.chunk(2, dim=0)[0])
         else:
             hidden_latents = None
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps)
         for t in self.progress_bar(self.scheduler.timesteps):
-            
             
             hidden_states = self.scheduler.scale_model_input(latents, t)
             timesteps = torch.tensor([t] * hidden_states.shape[0], device=self._execution_device)
@@ -233,25 +234,18 @@ class ProtDiffusionPipeline(DiffusionPipeline):
 
             # 2. Perform guidance
             if guidance_scale > 0:
-                eps, rest = model_output[:, :latent_channels], model_output[:, latent_channels:]
-                cond_eps, uncond_eps = eps.chunk(2, dim=0)
+                cond_output, uncond_output = model_output.chunk(2, dim=0)
 
-                half_eps = uncond_eps + guidance_scale * (cond_eps - uncond_eps)
-                eps = torch.cat([half_eps, half_eps], dim=0)
+                output = uncond_output + guidance_scale * (cond_output - uncond_output)
 
-                model_output = torch.cat([eps, rest], dim=1)
-            
+                model_output = torch.cat([output, output], dim=0)
 
-            # 3. Learned sigma - Not in use right now, see TODO.md
-            if self.transformer.out_channels // 2 == latent_channels:
-                model_output, _ = model_output.chunk(2, dim=1)
-
-            # 4. compute previous latents: x_t -> x_t-1
+            # 3. compute previous latents: x_t -> x_t-1
             latents = self.scheduler.step(model_output, t, latents, generator=generator).prev_sample
 
-        # If return_hidden_states, save the hidden latents for the finished inference
-        if return_hidden_latents:
-            hidden_latents.append(latents)
+            # If return_hidden_states, save the hidden latents for the finished inference
+            if return_hidden_latents:
+                hidden_latents.append(latents.chunk(2, dim=0)[0])
 
         if guidance_scale > 0:
             latents = latents[:batch_size]
@@ -279,7 +273,6 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         else:
             raise ValueError(f"output_type {output_type} not recognized. Must be one of 'token_ids', 'aa_seq', or 'logits'.")
 
-
         if not return_dict:
             return (output,)
 
@@ -293,7 +286,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
     ):
         assert pipeline_output.hidden_latents is not None, "pipeline_output.hidden_latents must be set to use animate_inference"
         assert pipeline_output.hidden_latents[0].ndim == 3, "pipeline_output.hidden_latents must be a list of 3D tensors"
-        assert pipeline_output.hidden_latents[0].shape[1] % 2 == 0, "pipeline_output.hidden_latents must have an even number of channels in the second dimension"
+        assert pipeline_output.hidden_latents[0].shape[1] % 2 == 0, "pipeline_output.hidden_latents must have an even number of channels"
 
         if not os.path.exists(png_dir):
             os.makedirs(png_dir)
@@ -304,37 +297,51 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         hidden_batch_size = pipeline_output.hidden_latents[0].shape[0]
         mask_batch_size = pipeline_output.attention_mask.shape[0]
         assert mask_batch_size == 1, "animate_inference only supports batch_size 1, will only animate the first sample in the batch."
+        assert hidden_batch_size == mask_batch_size, "hidden_batch_size must be the same as mask_batch_size. This indicates that guidance was used, which is required for the animation."
         
-        assert hidden_batch_size == 2 * mask_batch_size, "hidden_batch_size must be twice mask_batch_size. This indicates that guidance was used, which is required for the animation."
-        
-
         # Get the inputs
         positions_pr_line = 64
         latents = pipeline_output.hidden_latents
         latent_dim = latents[0].shape[1]
+        attention_mask = pipeline_output.attention_mask
         class_labels = pipeline_output.class_labels
         latent_len = latents[0].shape[2]
         pad_to_multiple_of = self.vae.pad_to_multiple_of
-        num_lines = (latent_len * pad_to_multiple_of) // positions_pr_line
+        num_positions = latent_len * pad_to_multiple_of
+        num_lines = num_positions // positions_pr_line
+        n_latent_plots = latent_dim // 2
 
-        n_latent_plots = latent_dim // 2 + 1
+        # Plotting parameters
+        ylim: tuple = (-0.1,1.1)
+        width = 10
+        line_height = 1
+        characters: str = self.tokenizer.decode(range(self.tokenizer.vocab_size))
+        amino_acids = list(characters)
+        last_height_ratio = width / (n_latent_plots * line_height)
+
+        print(f"Animating inference of {len(latents)} steps")
 
         for t in range(len(latents)):
 
+            print(f"Animating step {t}")
+
             latent = latents[t]
-            guided_latent = latent[1:]
-            latent = latent[:1]
+            logits = self.vae.decode(latent, attention_mask=attention_mask).sample
+            logits = logits[0].cpu()
+            latent = latent[0].cpu()
+            probs = F.softmax(logits, dim=0).cpu().numpy()
 
-            plt.figure(figsize=(100, 5 * num_lines))
+            fig = plt.figure(figsize=(100, 5 * num_lines + 50))
+            gs = fig.add_gridspec(num_lines + 1, n_latent_plots, height_ratios=[1] * num_lines + [last_height_ratio])
+            axs = [fig.add_subplot(gs[i,:]) for i in range(num_lines)]
 
-            for line in range(num_lines):
+            for i, line in enumerate(range(num_lines)):
                 start = line * positions_pr_line
                 end = min(start + positions_pr_line, num_positions)
-                
-                df = pd.DataFrame(array.T[start:end], columns=amino_acids, dtype=float)
-                
+                df = pd.DataFrame(probs.T[start:end], columns=amino_acids, dtype=float)
+
                 logo = logomaker.Logo(df, 
-                                    ax=axes[line, 0],
+                                    ax=axs[i],
                                     color_scheme=make_color_dict(cs=characters),
                 )
                 
@@ -343,47 +350,13 @@ class ProtDiffusionPipeline(DiffusionPipeline):
                 logo.ax.set_ylabel("Probability")
                 logo.ax.set_xlabel("Position")
                 logo.ax.set_ylim(*ylim)
+            
+            # Plot latent
+            for i in range(n_latent_plots):
+                ax = fig.add_subplot(gs[-1, i])
+                part_latent = latent[i*2:i*2+2]
+                latent_ax(ax=ax, latent=part_latent, title=f"Latent {i}", s = 2000)
 
-
-@torch.no_grad()
-def make_logoplot(array, label:str, png_path:str, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY", positions_pr_line:int = 64, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 50):
-    assert array.ndim == 2
-
-    amino_acids = list(characters)
-
-    if os.path.exists(png_path): # If the file already exists, skip making the logoplot
-        print(f"File already exists: {png_path}")
-        return
-
-    num_positions = array.shape[1]
-    num_lines = (num_positions + positions_per_line - 1) // positions_per_line
-
-    fig, axes = plt.subplots(num_lines, 1, figsize=(width, 5 * num_lines), squeeze=False)
-
-    for line in range(num_lines):
-        start = line * positions_per_line
-        end = min(start + positions_per_line, num_positions)
-        
-        df = pd.DataFrame(array.T[start:end], columns=amino_acids, dtype=float)
-        
-        logo = logomaker.Logo(df, 
-                              ax=axes[line, 0],
-                              color_scheme=make_color_dict(cs=characters),
-        )
-        
-        logo.style_spines(visible=False)
-        logo.style_spines(spines=['left', 'bottom'], visible=True)
-        logo.ax.set_ylabel("Probability")
-        logo.ax.set_xlabel("Position")
-        logo.ax.set_ylim(*ylim)
-
-    plt.tight_layout()
-    plt.title(f"{label}")
-
-    # Save the figure as a PNG file
-    plt.savefig(png_path, dpi = dpi)
-    plt.close(fig)
-
-    gc.collect()  # Force garbage collection
-
-    return
+            plt.tight_layout()
+            plt.title(f"Step {t}, class {class_labels[0]}")
+            plt.savefig(os.path.join(png_dir, f"step_{t}.png"))

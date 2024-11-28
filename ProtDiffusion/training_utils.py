@@ -670,6 +670,8 @@ class VAETrainer:
         else:
             raise ValueError("Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`")
 
+        num_training_steps = (len(train_dataloader) * config.num_epochs) // self.config.gradient_accumulation_steps
+
         if config.lr_schedule == 'constant':
             lr_scheduler = get_constant_schedule_with_warmup(
                 optimizer=optimizer,
@@ -679,19 +681,19 @@ class VAETrainer:
             lr_scheduler = get_cosine_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs),
+                num_training_steps=num_training_steps,
             )
         elif config.lr_schedule == 'cosine_10x_decay':
             lr_scheduler = get_cosine_10x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs),
+                num_training_steps=num_training_steps,
             )
         elif config.lr_schedule == 'cosine_100x_decay':
             lr_scheduler = get_cosine_100x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs),
+                num_training_steps=num_training_steps,
             )
         else:
             raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')
@@ -1143,6 +1145,8 @@ class ProtDiffusionTrainer:
         else:
             raise ValueError("Invalid optimizer, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`")
 
+        num_training_steps = (len(train_dataloader) * config.num_epochs) // self.config.gradient_accumulation_steps
+
         if config.lr_schedule == 'constant':
             lr_scheduler = get_constant_schedule_with_warmup(
                 optimizer=optimizer,
@@ -1152,19 +1156,19 @@ class ProtDiffusionTrainer:
             lr_scheduler = get_cosine_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs),
+                num_training_steps=num_training_steps,
             )
         elif config.lr_schedule == 'cosine_10x_decay':
             lr_scheduler = get_cosine_10x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs),
+                num_training_steps=num_training_steps,
             )
         elif config.lr_schedule == 'cosine_100x_decay':
             lr_scheduler = get_cosine_100x_decay_schedule_with_warmup(
                 optimizer=optimizer,
                 num_warmup_steps=config.lr_warmup_steps,
-                num_training_steps=(len(train_dataloader) * config.num_epochs),
+                num_training_steps=num_training_steps,
             )
         else:
             raise NotImplementedError('unknown lr schedule: {config.lr_schedule}')
@@ -1536,7 +1540,7 @@ class ProtDiffusionTrainer:
 
                 # Evaluation and saving the model
                 if self.training_variables.global_step == 1 or self.training_variables.global_step % self.config.save_image_model_steps == 0 or self.training_variables.global_step == len(self.train_dataloader) * self.config.num_epochs:
-                    
+                    break # TODO: remove break
             ### My RAM gets eaten somewhere here
                     # Test of inference using the EMA model
                     self.accelerator.wait_for_everyone()
@@ -1565,7 +1569,7 @@ class ProtDiffusionTrainer:
                 # Test of inference using the MSE model every epoch
                 self.accelerator.wait_for_everyone()
                 if self.accelerator.is_main_process:
-                    pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.transformer), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                    pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.ema.ema_model), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
                     self.inference_test(pipeline)
             ### My RAM gets eaten somewhere here
 

@@ -530,7 +530,7 @@ class DiTTransformer1DModel(ModelMixin, ConfigMixin):
         norm_type: str = "ada_norm_zero",
         norm_elementwise_affine: bool = False,
         norm_eps: float = 1e-5,
-        pos_embed_type: Optional[str] = None, # sunisoidal
+        pos_embed_type: Optional[str] = None, # sinusoidal
         num_positional_embeddings: Optional[int] = None,
         use_rope_embed: bool = False, # RoPE https://github.com/lucidrains/rotary-embedding-torch
     ):

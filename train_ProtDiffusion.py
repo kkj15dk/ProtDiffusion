@@ -42,14 +42,14 @@ generator = torch.Generator().manual_seed(config.seed)
 
 # %%
 # Get pretrained models
-# vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/24.7/EMA')
-vae = AutoencoderKL1D.from_pretrained('/zhome/fb/0/155603/output/protein-VAE-UniRef50_v24.12_latent-4_conv_transpose/pretrained/EMA')
+vae = AutoencoderKL1D.from_pretrained('/home/kkj/ProtDiffusion/output/EMA_VAE_v24.12')
+# vae = AutoencoderKL1D.from_pretrained('/zhome/fb/0/155603/output/protein-VAE-UniRef50_v24.12_latent-4_conv_transpose/pretrained/EMA')
 
-# tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
-tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+tokenizer = PreTrainedTokenizerFast.from_pretrained("/home/kkj/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
+# tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiffusion/ProtDiffusion/tokenizer/tokenizer_v4.2")
 
-# dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
-dataset = load_from_disk('/work3/s204514/IPR036736_90_grouped')
+dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/IPR036736_90_grouped')
+# dataset = load_from_disk('/work3/s204514/IPR036736_90_grouped')
 dataset = dataset.shuffle(config.seed)
 
 train_dataset = dataset['train']

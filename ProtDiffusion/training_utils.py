@@ -859,7 +859,7 @@ class VAETrainer:
         # Calculate statistics for the validation set
         mu = np.mean(latent_data)
         std = np.std(latent_data)
-        model.scaling_factor = 1/std # Set the scaling factor for the VAE to be 1/std, so that the latent space is normalized sd=1
+        model.config.scaling_factor = 1/std # Set the scaling factor for the VAE to be 1/std, so that the latent space is normalized sd=1
 
         acc = num_correct_residues / total_residues
         log_loss = running_loss / len(self.val_dataloader)

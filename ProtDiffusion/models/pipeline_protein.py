@@ -256,8 +256,6 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         # Decode latents
         if self.vae.config.scaling_factor is not None:
             latents = 1 / self.vae.config.scaling_factor * latents
-            if return_hidden_latents:
-                hidden_latents = [1 / self.vae.config.scaling_factor * latent for latent in hidden_latents]
         
         vae_output = self.vae.decode(latents, attention_mask=attention_mask).sample
 
@@ -328,7 +326,8 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             print(f"Animating step {t}")
 
             latent = latents[t]
-            logits = self.vae.decode(latent, attention_mask=attention_mask).sample
+            unscaled_latent = 1 / self.vae.config.scaling_factor * latent
+            logits = self.vae.decode(unscaled_latent, attention_mask=attention_mask).sample
             logits = logits[0].cpu()
             latent = latent[0].cpu()
             probs = F.softmax(logits, dim=0).cpu().numpy()

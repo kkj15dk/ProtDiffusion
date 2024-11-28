@@ -38,6 +38,7 @@ from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 
 import os
+import glob
 import matplotlib.pyplot as plt
 import logomaker
 import pandas as pd
@@ -256,8 +257,8 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         if self.vae.config.scaling_factor is not None:
             latents = 1 / self.vae.config.scaling_factor * latents
             if return_hidden_latents:
-                hidden_latents = [1 / self.vae.config.scaling_factor * latents for latents in hidden_latents]
-
+                hidden_latents = [1 / self.vae.config.scaling_factor * latent for latent in hidden_latents]
+        
         vae_output = self.vae.decode(latents, attention_mask=attention_mask).sample
 
         if output_type == "token_ids":
@@ -318,6 +319,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         characters: str = self.tokenizer.decode(range(self.tokenizer.vocab_size))
         amino_acids = list(characters)
         last_height_ratio = width / (n_latent_plots * line_height)
+        symbol_size = 30
 
         print(f"Animating inference of {len(latents)} steps")
 
@@ -331,7 +333,9 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             latent = latent[0].cpu()
             probs = F.softmax(logits, dim=0).cpu().numpy()
 
-            fig = plt.figure(figsize=(100, 5 * num_lines + 50))
+            fig = plt.figure(figsize=(width, line_height * num_lines + width / n_latent_plots), dpi=100)
+            plt.title(f"Step {t}, class {class_labels[0]}")
+            plt.axis('off')
             gs = fig.add_gridspec(num_lines + 1, n_latent_plots, height_ratios=[1] * num_lines + [last_height_ratio])
             axs = [fig.add_subplot(gs[i,:]) for i in range(num_lines)]
 
@@ -343,20 +347,46 @@ class ProtDiffusionPipeline(DiffusionPipeline):
                 logo = logomaker.Logo(df, 
                                     ax=axs[i],
                                     color_scheme=make_color_dict(cs=characters),
+                                    figsize=(width, line_height),
                 )
                 
                 logo.style_spines(visible=False)
-                logo.style_spines(spines=['left', 'bottom'], visible=True)
+                logo.style_spines(spines=['left'], visible=True) # , 'bottom'], visible=True)
                 logo.ax.set_ylabel("Probability")
-                logo.ax.set_xlabel("Position")
+                logo.ax.tick_params(
+                    axis='x',          # changes apply to the x-axis
+                    which='both',      # both major and minor ticks are affected
+                    bottom=False,      # ticks along the bottom edge are off
+                    top=False,         # ticks along the top edge are off
+                    labelbottom=False, # labels along the bottom edge are off
+                )
+                # logo.ax.set_xlabel("Position")
                 logo.ax.set_ylim(*ylim)
             
             # Plot latent
             for i in range(n_latent_plots):
                 ax = fig.add_subplot(gs[-1, i])
                 part_latent = latent[i*2:i*2+2]
-                latent_ax(ax=ax, latent=part_latent, title=f"Latent {i}", s = 2000)
+                latent_ax(ax=ax, 
+                          latent=part_latent, 
+                          s = symbol_size,
+                          xlabel = f"Latent dimension {i*2 + 1}",
+                          ylabel = f"Latent dimension {i*2 + 2}",
+                )
 
             plt.tight_layout()
-            plt.title(f"Step {t}, class {class_labels[0]}")
             plt.savefig(os.path.join(png_dir, f"step_{t}.png"))
+            plt.close()
+        
+        print(f"Finished animating inference of {len(latents)} steps")
+        print(f"Saved images to {png_dir}")
+        print(f"Creating gif...")
+        
+        # Get the list of PNG files and sort them numerically
+        png_files = sorted(glob.glob(os.path.join(png_dir, "step_*.png")), key=lambda x: int(os.path.basename(x).split('_')[1].split('.')[0]))
+
+        # Create the command string with the sorted files
+        command = f"convert -delay 30 -loop 1 {' '.join(png_files)} {os.path.join(png_dir, 'animation.gif')}"
+
+        # Execute the command
+        os.system(command)

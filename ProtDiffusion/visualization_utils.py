@@ -7,6 +7,7 @@ import pandas as pd
 import logomaker
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+from typing import Optional
 
 from logomaker.src.colors import get_color_dict
 
@@ -73,19 +74,20 @@ def make_logoplot(array: np.ndarray, label:str, png_path:str, characters:str = "
 # %%
 def latent_ax(ax: plt.Axes, 
               latent: torch.Tensor, 
-              title: str, 
               s: int = 20,
               marker: str = 'o', 
               cmap = cm.get_cmap('viridis'),
               xlabel: str = 'Latent Dimension 1', 
               ylabel: str = 'Latent Dimension 2',
+              title: Optional[str] = None, 
 ):
     assert latent.ndim == 2
     dims = latent.shape[0]
     assert dims == 2, "Latent tensor must have 2 dimensions, not {}".format(dims)
     length = latent.shape[1]
 
-    ax.set_title(title)
+    if title is not None:
+        ax.set_title(title)
     ax.scatter(latent[0, :], latent[1, :], s=s, c=np.arange(length), marker=marker, cmap=cmap)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)

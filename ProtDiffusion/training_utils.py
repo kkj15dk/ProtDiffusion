@@ -1087,7 +1087,11 @@ class ProtDiffusionTrainer:
                  eval_guidance_scale: float = 2.0, # the scale of the guidance for the diffusion
                  eval_num_inference_steps: int = 1000, # the number of inference steps for the diffusion
         ):
-        self.noise_scheduler = noise_scheduler
+        self.noise_scheduler: Union[DDPMScheduler, FlowMatchingEulerScheduler] = noise_scheduler
+        self.transformer: DiTTransformer1DModel
+        self.vae: AutoencoderKL1D
+        self.tokenizer: PreTrainedTokenizerFast
+
         assert isinstance(noise_scheduler, (DDPMScheduler, FlowMatchingEulerScheduler)), "The noise scheduler must be an instance of KarrasDiffusionSchedulers or FlowMatchingEulerScheduler"
         # Figure out if we are doing flow (matching) or diffusion
         if isinstance(noise_scheduler, DDPMScheduler):
@@ -1102,6 +1106,13 @@ class ProtDiffusionTrainer:
         self.eval_seq_len = eval_seq_len
         assert isinstance(eval_seq_len, (int, list)), "The evaluation sequence length should be an integer or a list of integers"
         assert all(seq_len <= self.config.max_len for seq_len in eval_seq_len), "The evaluation sequence length must not be greater than the maximum sequence length"
+
+        if vae.config.scaling_factor is None:
+            print("No scaling factor found in the VAE, setting it to 1.0")
+            self.scaling_factor = 1.0
+        else:
+            print(f"Scaling factor found in the VAE: {vae.config.scaling_factor}")
+            self.scaling_factor = vae.config.scaling_factor
 
         self.eval_class_labels = eval_class_labels
         self.eval_guidance_scale = eval_guidance_scale
@@ -1295,12 +1306,14 @@ class ProtDiffusionTrainer:
             #     print(batch['id'][0])
             attention_mask = batch['attention_mask']
 
-            vae_encoded: EncoderKLOutput1D = self.vae.encode(x = input_ids,
-                                                             attention_mask = attention_mask,
+            vae_encoded = self.vae.encode(x = input_ids,
+                                          attention_mask = attention_mask,
             )
 
             attention_mask = vae_encoded.attention_masks[-1]
             latent = vae_encoded.latent_dist.sample(generator=generator) # Mode is deterministic TODO: .sample() or .mode()?
+            latent = latent * self.scaling_factor # Scale the latent space to have sd=1
+
             label = batch['label']
 
             # Sample noise to add to the images
@@ -1461,6 +1474,7 @@ class ProtDiffusionTrainer:
 
                     attention_mask = vae_encoded.attention_masks[-1]
                     latent = vae_encoded.latent_dist.sample() # Mode is deterministic TODO: .sample() or .mode()?
+                    latent = latent * self.scaling_factor
 
                     n_tokens += attention_mask.sum()
 

@@ -31,7 +31,7 @@ from transformers import PreTrainedTokenizerFast
 from .dit_transformer_1d import DiTTransformer1DModel, Transformer1DModelOutput
 from .autoencoder_kl_1d import AutoencoderKL1D
 from ..schedulers.FlowMatchingEulerScheduler import FlowMatchingEulerScheduler
-from ..visualization_utils import latent_ax, make_color_dict
+from ..visualization_utils import latent_ax, make_color_dict, plot_latent_and_probs
 
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
@@ -57,6 +57,7 @@ class ProteinPipelineOutput(BaseOutput):
     hidden_latents: Optional[List[torch.Tensor]] = None,
     attention_mask: Optional[torch.Tensor] = None,
     class_labels: Optional[torch.Tensor] = None,
+    noise_pred: Optional[List[torch.Tensor]] = None,
 
 def logits_to_token_ids(logits: torch.Tensor, tokenizer: PreTrainedTokenizerFast, cutoff: Optional[float] = None) -> torch.Tensor:
     '''
@@ -119,6 +120,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         output_type: Optional[str] = "aa_seq", # "aa_seq", "token_ids", "logits"
         return_dict: bool = True,
         return_hidden_latents: bool = False, # wheter to return the latents at each timestep
+        return_noise_pred: bool = False, # wheter to return the noise prediction at each timestep
         cutoff: Optional[int] = None,
     ) -> Union[ProteinPipelineOutput, Tuple]:
         r"""
@@ -215,9 +217,18 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         # If return_hidden_states, save the hidden latents at each timestep
         if return_hidden_latents:
             hidden_latents = []
-            hidden_latents.append(latents.chunk(2, dim=0)[0])
+            if guidance_scale > 0:
+                hidden_latents.append(latents.chunk(2, dim=0)[0])
+            else:
+                hidden_latents.append(latents)
         else:
             hidden_latents = None
+        
+        # If return_noise_pred, save the noise prediction at each timestep
+        if return_noise_pred:
+            noise_pred = []
+        else:
+            noise_pred = None
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps)
@@ -244,9 +255,25 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             # 3. compute previous latents: x_t -> x_t-1
             latents = self.scheduler.step(model_output, t, latents, generator=generator).prev_sample
 
-            # If return_hidden_states, save the hidden latents for the finished inference
+            # If return_noise_pred, save the noise prediction at each timestep
+            if return_noise_pred:
+                if guidance_scale > 0:
+                    noise_pred.append(output)
+                else:
+                    noise_pred.append(model_output)
+
+            # If return_hidden_states, save the hidden latents for each timestep
             if return_hidden_latents:
-                hidden_latents.append(latents.chunk(2, dim=0)[0])
+                if guidance_scale > 0:
+                    hidden_latents.append(latents.chunk(2, dim=0)[0])
+                else:
+                    hidden_latents.append(latents)
+        
+        if return_noise_pred:
+            if guidance_scale > 0:
+                noise_pred.append(torch.zeros_like(output))
+            else:
+                noise_pred.append(torch.zeros_like(model_output))
 
         if guidance_scale > 0:
             latents = latents[:batch_size]
@@ -275,17 +302,26 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         if not return_dict:
             return (output,)
 
-        return ProteinPipelineOutput(seqs=output, hidden_latents=hidden_latents, attention_mask=attention_mask, class_labels=class_labels)
+        return ProteinPipelineOutput(seqs=output,
+                                     attention_mask=attention_mask,
+                                     class_labels=class_labels,
+                                     hidden_latents=hidden_latents,
+                                     noise_pred=noise_pred,
+        )
     
     @torch.no_grad()
     def animate_inference(
         self,
         pipeline_output: ProteinPipelineOutput,
         png_dir: str,
+        plot_noise: bool = False,
     ):
         assert pipeline_output.hidden_latents is not None, "pipeline_output.hidden_latents must be set to use animate_inference"
         assert pipeline_output.hidden_latents[0].ndim == 3, "pipeline_output.hidden_latents must be a list of 3D tensors"
         assert pipeline_output.hidden_latents[0].shape[1] % 2 == 0, "pipeline_output.hidden_latents must have an even number of channels"
+
+        if plot_noise:
+            assert pipeline_output.noise_pred is not None, "pipeline_output.noise_pred must be set to use animate_inference with plot_noise"
 
         if not os.path.exists(png_dir):
             os.makedirs(png_dir)
@@ -299,29 +335,24 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         assert hidden_batch_size == mask_batch_size, "hidden_batch_size must be the same as mask_batch_size. This indicates that guidance was used, which is required for the animation."
         
         # Get the inputs
-        positions_pr_line = 64
         latents = pipeline_output.hidden_latents
-        latent_dim = latents[0].shape[1]
         attention_mask = pipeline_output.attention_mask
         class_labels = pipeline_output.class_labels
-        latent_len = latents[0].shape[2]
         pad_to_multiple_of = self.vae.pad_to_multiple_of
-        num_positions = latent_len * pad_to_multiple_of
-        num_lines = num_positions // positions_pr_line
-        n_latent_plots = latent_dim // 2
-
+        
         # Plotting parameters
+        positions_pr_line = 64
         ylim: tuple = (-0.1,1.1)
         width = 10
         line_height = 1
         characters: str = self.tokenizer.decode(range(self.tokenizer.vocab_size))
-        amino_acids = list(characters)
-        last_height_ratio = width / (n_latent_plots * line_height)
         symbol_size = 30
 
         print(f"Animating inference of {len(latents)} steps")
 
         for t in range(len(latents)):
+            title = f"Step {t}, class {class_labels[0]}"
+            path = os.path.join(png_dir, f"step_{t}.png")
 
             print(f"Animating step {t}")
 
@@ -329,53 +360,28 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             unscaled_latent = 1 / self.vae.config.scaling_factor * latent
             logits = self.vae.decode(unscaled_latent, attention_mask=attention_mask).sample
             logits = logits[0].cpu()
-            latent = latent[0].cpu()
+            latent = latent[0].cpu().numpy()
             probs = F.softmax(logits, dim=0).cpu().numpy()
 
-            fig = plt.figure(figsize=(width, line_height * num_lines + width / n_latent_plots), dpi=100)
-            plt.title(f"Step {t}, class {class_labels[0]}")
-            plt.axis('off')
-            gs = fig.add_gridspec(num_lines + 1, n_latent_plots, height_ratios=[1] * num_lines + [last_height_ratio])
-            axs = [fig.add_subplot(gs[i,:]) for i in range(num_lines)]
+            if plot_noise:
+                noise_pred = pipeline_output.noise_pred[t][0].cpu().numpy()
+            else:
+                noise_pred = None
 
-            for i, line in enumerate(range(num_lines)):
-                start = line * positions_pr_line
-                end = min(start + positions_pr_line, num_positions)
-                df = pd.DataFrame(probs.T[start:end], columns=amino_acids, dtype=float)
-
-                logo = logomaker.Logo(df, 
-                                    ax=axs[i],
-                                    color_scheme=make_color_dict(cs=characters),
-                                    figsize=(width, line_height),
-                )
-                
-                logo.style_spines(visible=False)
-                logo.style_spines(spines=['left'], visible=True) # , 'bottom'], visible=True)
-                logo.ax.set_ylabel("Probability")
-                logo.ax.tick_params(
-                    axis='x',          # changes apply to the x-axis
-                    which='both',      # both major and minor ticks are affected
-                    bottom=False,      # ticks along the bottom edge are off
-                    top=False,         # ticks along the top edge are off
-                    labelbottom=False, # labels along the bottom edge are off
-                )
-                # logo.ax.set_xlabel("Position")
-                logo.ax.set_ylim(*ylim)
-            
-            # Plot latent
-            for i in range(n_latent_plots):
-                ax = fig.add_subplot(gs[-1, i])
-                part_latent = latent[i*2:i*2+2]
-                latent_ax(ax=ax, 
-                          latent=part_latent, 
-                          s = symbol_size,
-                          xlabel = f"Latent dimension {i*2 + 1}",
-                          ylabel = f"Latent dimension {i*2 + 2}",
-                )
-
-            plt.tight_layout()
-            plt.savefig(os.path.join(png_dir, f"step_{t}.png"))
-            plt.close()
+            # Plot the latents
+            plot_latent_and_probs(probs=probs, 
+                                  latent=latent, 
+                                  characters=characters, 
+                                  positions_pr_line=positions_pr_line, 
+                                  width=width, 
+                                  ylim=ylim, 
+                                  line_height=line_height, 
+                                  symbol_size=symbol_size,
+                                  path=path,
+                                  pad_to_multiple_of=pad_to_multiple_of,
+                                  title=title,
+                                  noise_pred=noise_pred,
+            )
         
         print(f"Finished animating inference of {len(latents)} steps")
         print(f"Saved images to {png_dir}")

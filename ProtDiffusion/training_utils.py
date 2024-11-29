@@ -195,11 +195,54 @@ def count_parameters(model):
     print(f"Model has {n_params} trainable parameters")
     return n_params
 
-def round_length(length: int, pad: int = 2, rounding: int = 16) -> int:
+def round_length(length: int, pad: int = 2, rounding: int = 8) -> int:
     '''
     Round the length to what it will be after processing by the tokenization process.
     '''
     return int(np.ceil((length + pad) / rounding) * rounding)
+
+def process_sequence(sequence: str,
+                     bos_token: str = "[",
+                     eos_token: str = "]",
+                     pad_token: str = "-",
+                     pad_to_multiple_of: int = 8,
+                     generator: torch.Generator = None,
+                     random_padding: bool = True,
+    ) -> str:
+        '''
+        Process the sequence by adding the bos and eos tokens, and padding it to a multiple of 16 (or what the variable is set to in the round_kength).
+        Return the sequence and the length of the sequence.
+        '''
+        seq_len = round_length(len(sequence), pad = 2, rounding = pad_to_multiple_of)
+        sequence = bos_token + sequence + eos_token
+        len_diff = seq_len - len(sequence)
+        if len_diff == 0:
+            return sequence
+        if random_padding:
+            rand_int = torch.randint(0, len_diff, (1,), generator = generator).item()
+            sequence = pad_token * rand_int + sequence + pad_token * (len_diff - rand_int)
+        else:
+            sequence = sequence + pad_token * len_diff
+        return sequence
+
+def tokenize_sequence(seq_list: List[str],
+                      tokenizer: PreTrainedTokenizerFast,
+                      padding: bool = True,
+                      truncation: bool = False,
+                      return_token_type_ids: bool = False,
+                      return_attention_mask: bool = False,
+                      return_tensors: str = "pt",
+    ) -> torch.Tensor:
+    tokenized = tokenizer(seq_list,
+                          padding=padding,
+                          truncation=truncation,
+                          return_token_type_ids=return_token_type_ids,
+                          return_attention_mask=return_attention_mask,
+                          return_tensors=return_tensors,
+    )
+
+    return tokenized
+    
 
 def calculate_stats(averages: List[int], standard_deviations: List[int], num_elements: List[int]):
     '''
@@ -440,28 +483,6 @@ class BatchSampler(Sampler):
         self.shuffle = shuffle
         assert self.batch_size * self.mega_batch_size // self.num_workers > 0, "The batch size times the mega batch size must be larger than the number of workers."
 
-    def process_sequence(self,
-                     sequence: str,
-                     bos_token: str = "[",
-                     eos_token: str = "]",
-                     pad_token: str = "-",
-    ) -> str:
-        '''
-        Process the sequence by adding the bos and eos tokens, and padding it to a multiple of 16 (or what the variable is set to in the round_kength).
-        Return the sequence and the length of the sequence.
-        '''
-        seq_len = round_length(len(sequence), pad = 2, rounding = self.pad_to_multiple_of)
-        sequence = bos_token + sequence + eos_token
-        len_diff = seq_len - len(sequence)
-        if len_diff == 0:
-            return sequence
-        if self.random_padding:
-            rand_int = torch.randint(0, len_diff, (1,), generator=self.generator).item()
-            sequence = pad_token * rand_int + sequence + pad_token * (len_diff - rand_int)
-        else:
-            sequence = sequence + pad_token * len_diff
-        return sequence
-
     def collate_fn(self, batch):
         '''
         Collate function for the DataLoader.
@@ -499,8 +520,8 @@ class BatchSampler(Sampler):
             # sequence
             seq = item[self.sequence_key]
             seq = str(seq, encoding='utf-8')
-            seq = self.process_sequence(seq)
-            seq_len = length_list[i] # make sure to get the processed seq_ltngth - meaning what it is after tokenization
+            seq = process_sequence(seq, pad_to_multiple_of=self.pad_to_multiple_of, generator=self.generator, random_padding=self.random_padding)
+            seq_len = length_list[i] # make sure to get the processed seq_length - meaning what it is after tokenization
 
             if seq_len > max_len:
                 index = torch.randint(0, seq_len - max_len, (1,), generator=self.generator).item()
@@ -508,13 +529,8 @@ class BatchSampler(Sampler):
             else:
                 seq_list.append(seq)
 
-        tokenized = self.tokenizer(seq_list,
-                        padding=True,
-                        truncation=False, # We truncate the sequences beforehand
-                        return_token_type_ids=False,
-                        return_attention_mask=False, # We make the attention mask ourselves, as the tokenizer does not recognize already padded inputs.
-                        return_tensors="pt",
-        )
+        tokenized = tokenize_sequence(seq_list, tokenizer=self.tokenizer)
+        
         input_ids = tokenized['input_ids']
         attention_mask: torch.BoolTensor = (input_ids != self.tokenizer.pad_token_id).to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
         # attention_mask = tokenized['attention_mask'].to(dtype=torch.bool) # Attention mask should be bool for scaled_dot_product_attention
@@ -1601,3 +1617,4 @@ class ProtDiffusionTrainer:
         
         ce_model.save_pretrained(os.path.join(output_dir, "CE"))
         ema_model.save_pretrained(os.path.join(output_dir, "EMA"))
+# %%

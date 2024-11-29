@@ -14,7 +14,7 @@
 ### -- specify amount of memory per core/slot -- 
 #BSUB -R "rusage[mem=2GB]"
 ### -- set walltime limit: hh:mm -- 
-#BSUB -W 04:00
+#BSUB -W 10:00
 ### -- send notification at start -- 
 #BSUB -B
 ### -- send notification at completion -- 

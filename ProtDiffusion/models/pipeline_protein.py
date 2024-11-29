@@ -57,6 +57,7 @@ class ProteinPipelineOutput(BaseOutput):
     hidden_latents: Optional[List[torch.Tensor]] = None,
     attention_mask: Optional[torch.Tensor] = None,
     class_labels: Optional[torch.Tensor] = None,
+    noise_pred: Optional[List[torch.Tensor]] = None,
 
 def logits_to_token_ids(logits: torch.Tensor, tokenizer: PreTrainedTokenizerFast, cutoff: Optional[float] = None) -> torch.Tensor:
     '''
@@ -119,6 +120,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         output_type: Optional[str] = "aa_seq", # "aa_seq", "token_ids", "logits"
         return_dict: bool = True,
         return_hidden_latents: bool = False, # wheter to return the latents at each timestep
+        return_noise_pred: bool = False, # wheter to return the noise prediction at each timestep
         cutoff: Optional[int] = None,
     ) -> Union[ProteinPipelineOutput, Tuple]:
         r"""
@@ -215,9 +217,18 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         # If return_hidden_states, save the hidden latents at each timestep
         if return_hidden_latents:
             hidden_latents = []
-            hidden_latents.append(latents.chunk(2, dim=0)[0])
+            if guidance_scale > 0:
+                hidden_latents.append(latents.chunk(2, dim=0)[0])
+            else:
+                hidden_latents.append(latents)
         else:
             hidden_latents = None
+        
+        # If return_noise_pred, save the noise prediction at each timestep
+        if return_noise_pred:
+            noise_pred = []
+        else:
+            noise_pred = None
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps)
@@ -244,9 +255,25 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             # 3. compute previous latents: x_t -> x_t-1
             latents = self.scheduler.step(model_output, t, latents, generator=generator).prev_sample
 
-            # If return_hidden_states, save the hidden latents for the finished inference
+            # If return_noise_pred, save the noise prediction at each timestep
+            if return_noise_pred:
+                if guidance_scale > 0:
+                    noise_pred.append(output)
+                else:
+                    noise_pred.append(model_output)
+
+            # If return_hidden_states, save the hidden latents for each timestep
             if return_hidden_latents:
-                hidden_latents.append(latents.chunk(2, dim=0)[0])
+                if guidance_scale > 0:
+                    hidden_latents.append(latents.chunk(2, dim=0)[0])
+                else:
+                    hidden_latents.append(latents)
+        
+        if return_noise_pred:
+            if guidance_scale > 0:
+                noise_pred.append(torch.zeros_like(output))
+            else:
+                noise_pred.append(torch.zeros_like(model_output))
 
         if guidance_scale > 0:
             latents = latents[:batch_size]
@@ -275,17 +302,26 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         if not return_dict:
             return (output,)
 
-        return ProteinPipelineOutput(seqs=output, hidden_latents=hidden_latents, attention_mask=attention_mask, class_labels=class_labels)
+        return ProteinPipelineOutput(seqs=output,
+                                     attention_mask=attention_mask,
+                                     class_labels=class_labels,
+                                     hidden_latents=hidden_latents,
+                                     noise_pred=noise_pred,
+        )
     
     @torch.no_grad()
     def animate_inference(
         self,
         pipeline_output: ProteinPipelineOutput,
         png_dir: str,
+        plot_noise: bool = False,
     ):
         assert pipeline_output.hidden_latents is not None, "pipeline_output.hidden_latents must be set to use animate_inference"
         assert pipeline_output.hidden_latents[0].ndim == 3, "pipeline_output.hidden_latents must be a list of 3D tensors"
         assert pipeline_output.hidden_latents[0].shape[1] % 2 == 0, "pipeline_output.hidden_latents must have an even number of channels"
+
+        if plot_noise:
+            assert pipeline_output.noise_pred is not None, "pipeline_output.noise_pred must be set to use animate_inference with plot_noise"
 
         if not os.path.exists(png_dir):
             os.makedirs(png_dir)
@@ -327,6 +363,11 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             latent = latent[0].cpu().numpy()
             probs = F.softmax(logits, dim=0).cpu().numpy()
 
+            if plot_noise:
+                noise_pred = pipeline_output.noise_pred[t][0].cpu().numpy()
+            else:
+                noise_pred = None
+
             # Plot the latents
             plot_latent_and_probs(probs=probs, 
                                   latent=latent, 
@@ -339,6 +380,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
                                   path=path,
                                   pad_to_multiple_of=pad_to_multiple_of,
                                   title=title,
+                                  noise_pred=noise_pred,
             )
         
         print(f"Finished animating inference of {len(latents)} steps")

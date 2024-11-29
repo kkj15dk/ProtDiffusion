@@ -29,7 +29,7 @@ def make_color_dict(color_scheme:str = 'weblogo_protein', cs:str = "-[]ACDEFGHIK
 
 # %%
 @torch.no_grad()
-def make_logoplot(array: np.ndarray, label:str, png_path:str, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY", positions_per_line:int = 60, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 50):
+def make_logoplot(array: np.ndarray, label:str, png_path:str, characters:str = "-[]ACDEFGHIKLMNPQRSTVWY", positions_per_line:int = 64, width:int = 100, ylim:tuple = (-0.1,1.1), dpi:int = 50):
     assert array.ndim == 2
 
     amino_acids = list(characters)
@@ -88,7 +88,8 @@ def latent_ax(ax: plt.Axes,
 
     if title is not None:
         ax.set_title(title)
-    ax.scatter(latent[0, :], latent[1, :], s=s, c=np.arange(length), marker=marker, cmap=cmap)
+    if np.any(latent):
+        ax.scatter(latent[0, :], latent[1, :], s=s, c=np.arange(length), marker=marker, cmap=cmap)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.grid(True)
@@ -108,6 +109,7 @@ def plot_latent_and_probs(probs: np.ndarray,
                         path: str = None,
                         pad_to_multiple_of: int = 8,
                         title: str = None,
+                        noise_pred: Optional[np.ndarray] = None,
 ):
     # Get the inputs
     latent_dim = latent.shape[0]
@@ -119,11 +121,16 @@ def plot_latent_and_probs(probs: np.ndarray,
     # Plotting parameters
     amino_acids = list(characters)
     last_height_ratio = width / (n_latent_plots * line_height)
+    noise_plots = 2 if noise_pred is not None else 1
+    height_ratios = [1] * num_lines + [last_height_ratio] * noise_plots
 
-    fig = plt.figure(figsize=(width, line_height * num_lines + width / n_latent_plots), dpi=100)
-    plt.title(title)
+    fig_height = line_height * num_lines + (last_height_ratio * noise_plots * line_height)
+    fig = plt.figure(figsize=(width, fig_height), dpi=100)
+    if title:
+        plt.title(title)
     plt.axis('off')
-    gs = fig.add_gridspec(num_lines + 1, n_latent_plots, height_ratios=[1] * num_lines + [last_height_ratio])
+
+    gs = fig.add_gridspec(num_lines + noise_plots, n_latent_plots, height_ratios=height_ratios)
     axs = [fig.add_subplot(gs[i,:]) for i in range(num_lines)]
 
     for i, line in enumerate(range(num_lines)):
@@ -152,7 +159,8 @@ def plot_latent_and_probs(probs: np.ndarray,
 
     # Plot latent
     for i in range(n_latent_plots):
-        ax = fig.add_subplot(gs[-1, i])
+        ax = fig.add_subplot(gs[num_lines, i])
+        ax.set_title(f"Latent")
         part_latent = latent[i*2:i*2+2]
         latent_ax(ax=ax, 
                     latent=part_latent, 
@@ -160,6 +168,16 @@ def plot_latent_and_probs(probs: np.ndarray,
                     xlabel = f"Latent dimension {i*2 + 1}",
                     ylabel = f"Latent dimension {i*2 + 2}",
         )
+        if noise_plots == 2:
+            noise_ax = fig.add_subplot(gs[num_lines + 1, i])
+            noise_ax.set_title(f"Noise")
+            part_noise = noise_pred[i*2:i*2+2]
+            latent_ax(ax=noise_ax, 
+                        latent=part_noise, 
+                        s = symbol_size,
+                        xlabel = f"Noise dimension {i*2 + 1}",
+                        ylabel = f"Noise dimension {i*2 + 2}",
+            )
 
     plt.tight_layout()
     plt.savefig(path)

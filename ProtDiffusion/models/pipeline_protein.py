@@ -207,7 +207,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             latents = randn_tensor(latent_shape, generator=generator, device=self._execution_device)
 
         # If using guidance, double the input for classifier free guidance
-        if guidance_scale > 0: # TODO: Maybe should be above 1 instead of above 0, see https://github.com/huggingface/diffusers/blob/v0.30.3/src/diffusers/pipelines/dit/pipeline_dit.py#L159
+        if guidance_scale is not None: # > 0: # TODO: Maybe should be above 1 instead of above 0, see https://github.com/huggingface/diffusers/blob/v0.30.3/src/diffusers/pipelines/dit/pipeline_dit.py#L159
             latents = torch.cat([latents] * 2, dim=0)
             attention_mask = torch.cat([attention_mask] * 2, dim=0)
             class_null = torch.tensor([self.transformer.num_classes] * batch_size, device=self._execution_device)
@@ -217,7 +217,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
         # If return_hidden_states, save the hidden latents at each timestep
         if return_hidden_latents:
             hidden_latents = []
-            if guidance_scale > 0:
+            if guidance_scale is not None: # > 0:
                 hidden_latents.append(latents.chunk(2, dim=0)[0])
             else:
                 hidden_latents.append(latents)
@@ -245,7 +245,7 @@ class ProtDiffusionPipeline(DiffusionPipeline):
             ).sample
 
             # 2. Perform guidance
-            if guidance_scale > 0:
+            if guidance_scale is not None: # > 0:
                 cond_output, uncond_output = model_output.chunk(2, dim=0)
 
                 output = uncond_output + guidance_scale * (cond_output - uncond_output)
@@ -257,25 +257,26 @@ class ProtDiffusionPipeline(DiffusionPipeline):
 
             # If return_noise_pred, save the noise prediction at each timestep
             if return_noise_pred:
-                if guidance_scale > 0:
+                if guidance_scale is not None: # > 0:
                     noise_pred.append(output)
                 else:
                     noise_pred.append(model_output)
 
             # If return_hidden_states, save the hidden latents for each timestep
             if return_hidden_latents:
-                if guidance_scale > 0:
+                if guidance_scale is not None: # > 0:
                     hidden_latents.append(latents.chunk(2, dim=0)[0])
                 else:
                     hidden_latents.append(latents)
         
+        # After the loop, get the final output
         if return_noise_pred:
-            if guidance_scale > 0:
+            if guidance_scale is not None: # > 0:
                 noise_pred.append(torch.zeros_like(output))
             else:
                 noise_pred.append(torch.zeros_like(model_output))
 
-        if guidance_scale > 0:
+        if guidance_scale is not None: # > 0:
             latents = latents[:batch_size]
             attention_mask = attention_mask[:batch_size]
             class_labels = class_labels[:batch_size]

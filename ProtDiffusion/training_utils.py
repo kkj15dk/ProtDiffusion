@@ -1262,7 +1262,6 @@ class ProtDiffusionTrainer:
         return samples
 
     def sample_timesteps(self, bs: int, generator: Optional[torch.Generator] = None) -> torch.Tensor:
-        
         '''
         Get the timesteps for the diffusion or flow matching training.
         bs: int, the batch size
@@ -1562,6 +1561,7 @@ class ProtDiffusionTrainer:
                     self.accelerator.wait_for_everyone()
                     if self.accelerator.is_main_process:
                         pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.ema.ema_model), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                        pipeline.transformer.eval()
                         self.inference_test(pipeline)
             ### My RAM gets eaten somewhere here
 
@@ -1586,6 +1586,7 @@ class ProtDiffusionTrainer:
                 self.accelerator.wait_for_everyone()
                 if self.accelerator.is_main_process:
                     pipeline = ProtDiffusionPipeline(transformer=self.accelerator.unwrap_model(self.ema.ema_model), vae=self.vae, scheduler=self.noise_scheduler, tokenizer=self.tokenizer)
+                    pipeline.transformer.eval()
                     self.inference_test(pipeline)
             ### My RAM gets eaten somewhere here
 

@@ -641,6 +641,7 @@ class TrainingVariables:
     global_step: int = 0
     val_loss: float = float("inf")
     max_len_start: int = 0
+    n_tokens: int = 0
 
     def state_dict(self):
         return self.__dict__
@@ -903,6 +904,7 @@ class VAETrainer:
                 self.training_variables.global_step = 0
                 self.training_variables.val_loss = float("inf")
                 self.training_variables.max_len_start = self.config.max_len_start
+                self.training_variables.n_tokens = 0
             else:
                 self.accelerator.load_state(input_dir=from_checkpoint)
                 # self.lr_scheduler._initial_step()
@@ -921,7 +923,7 @@ class VAETrainer:
 
         # Now you train the model
         self.model.train()
-        n_tokens = 0
+
         for epoch in range(starting_epoch, self.config.num_epochs):
 
             if epoch == starting_epoch:
@@ -940,7 +942,7 @@ class VAETrainer:
                     input_ids: torch.IntTensor = batch['input_ids']
                     attention_mask: torch.BoolTensor = batch['attention_mask']
 
-                    n_tokens += attention_mask.sum()
+                    self.training_variables.n_tokens += attention_mask.sum()
 
                     # Forward pass
                     output: AutoencoderKLOutput1D = self.model(sample = input_ids,
@@ -959,8 +961,8 @@ class VAETrainer:
 
                     # Gradient clipping and gradient scaling for gradient accumulation with different length batches
                     if self.accelerator.sync_gradients:
-                        self.scale_gradients(self.model, n_tokens)
-                        n_tokens = 0
+                        self.scale_gradients(self.model, self.training_variables.n_tokens)
+                        self.training_variables.n_tokens = 0
                         if self.config.gradient_clip_val is not None:
                             self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
 
@@ -1036,7 +1038,7 @@ class ProtDiffusionTrainingConfig:
     lr_warmup_steps: int  = 1000
     lr_schedule: str = 'cosine'
     save_image_model_steps: int  = 1000
-    save_every_epoch: bool = False  # whether to save the model every epoch
+    save_epochs: int = 1  # How often to save the model
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision #TODO: implement fully
     optimizer: str = "AdamW"  # the optimizer to use, choose between `AdamW`, `Adam`, `SGD`, and `Adamax`
     SGDmomentum: Optional[float] = 0.9
@@ -1315,7 +1317,7 @@ class ProtDiffusionTrainer:
         else:
             generator = None
 
-        progress_bar = tqdm(total=len(dataloader), disable = not self.accelerator.is_local_main_process)
+        progress_bar = tqdm(total=len(dataloader), disable = True) # not self.accelerator.is_local_main_process)
 
         running_loss = 0.0
 
@@ -1453,6 +1455,7 @@ class ProtDiffusionTrainer:
                 self.training_variables.global_step = 0
                 self.training_variables.val_loss = float("inf")
                 self.training_variables.max_len_start = self.config.max_len_start
+                self.training_variables.n_tokens = 0
             else:
                 self.accelerator.load_state(input_dir=from_checkpoint)
                 # Skip the first batches
@@ -1468,7 +1471,7 @@ class ProtDiffusionTrainer:
 
         # Now you train the model
         self.transformer.train()
-        n_tokens = 0
+        
         for epoch in range(starting_epoch, self.config.num_epochs):
 
             if epoch == starting_epoch:
@@ -1476,7 +1479,7 @@ class ProtDiffusionTrainer:
             else:
                 dataloader = self.train_dataloader
 
-            progress_bar = tqdm(total=len(dataloader), disable = not self.accelerator.is_local_main_process)
+            progress_bar = tqdm(total=len(dataloader), disable = True) # not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Epoch {epoch}")
 
             for step, batch in enumerate(dataloader):
@@ -1496,7 +1499,7 @@ class ProtDiffusionTrainer:
                     latent = vae_encoded.latent_dist.sample() # Mode is deterministic TODO: .sample() or .mode()?
                     latent = latent * self.scaling_factor
 
-                    n_tokens += attention_mask.sum()
+                    self.training_variables.n_tokens += attention_mask.sum()
 
                     # Sample noise to add to the images
                     noise = torch.randn(latent.shape, device=latent.device)
@@ -1528,8 +1531,8 @@ class ProtDiffusionTrainer:
 
                     # Gradient clipping and gradient scaling for gradient accumulation with different length batches
                     if self.accelerator.sync_gradients:
-                        self.scale_gradients(self.transformer, n_tokens)
-                        n_tokens = 0
+                        self.scale_gradients(self.transformer, self.training_variables.n_tokens)
+                        self.training_variables.n_tokens = 0
                         if self.config.gradient_clip_val is not None:
                             self.accelerator.clip_grad_norm_(self.transformer.parameters(), self.config.gradient_clip_val)
                     
@@ -1577,9 +1580,9 @@ class ProtDiffusionTrainer:
                         self.accelerator.save_state()
                     self.transformer.train() # Make sure the model is in train mode
 
-            # After every epoch
+            # Every save epoch
             torch.cuda.empty_cache()
-            if self.config.save_every_epoch:
+            if epoch % self.config.save_epochs == 0:
 
             ### My RAM gets eaten somewhere here
                 # Test of inference using the MSE model every epoch
@@ -1602,6 +1605,7 @@ class ProtDiffusionTrainer:
                 self.transformer.train() # Make sure the model is in train mode
 
         # After training
+        self.accelerator.wait_for_everyone()
         self.accelerator.end_training()
         self.save_pretrained()
 

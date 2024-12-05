@@ -17,14 +17,14 @@ config = ProtDiffusionTrainingConfig(
     num_epochs=200, # the number of epochs to train for
     batch_size=64,
     mega_batch=240,
-    gradient_accumulation_steps=2,
-    learning_rate=2e-4,
+    gradient_accumulation_steps=1,
+    learning_rate=2e-5,
     lr_warmup_steps=500, # 100
     lr_schedule='constant', # 'cosine'
     save_image_model_steps=1000000,
-    save_epochs=20, # Inference test with EMA model
-    output_dir=os.path.join("output","ProtDiffusion-IPR036736_RoPE_v4"),  # the model name locally and on the HF Hub
-    total_checkpoints_limit=1, # the maximum number of checkpoints to keep
+    save_epochs=1, # Inference test with EMA model
+    output_dir=os.path.join("output","ProtDiffusion-IPR036736_RoPE_v5.2.2"),  # the model name locally and on the HF Hub
+    total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     pad_to_multiple_of=8,
     max_len=2048, # 512 * 2**6
@@ -50,7 +50,7 @@ tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiff
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/IPR036736_90_grouped')
 dataset = load_from_disk('/work3/s204514/IPR036736_90_grouped')
-dataset = dataset.shuffle(config.seed) # restart at checkpoint 23
+dataset = dataset.shuffle(config.seed)
 
 train_dataset = dataset['train']
 val_dataset = dataset['valid']
@@ -91,10 +91,10 @@ print("length of val dataloader: ", len(val_dataloader))
 
 # %%
 transformer = DiTTransformer1DModel(
-    num_attention_heads = 12,
+    num_attention_heads = 8,
     attention_head_dim = 64,
     in_channels = vae.config.latent_channels,
-    num_layers = 12,
+    num_layers = 8,
     attention_bias = True,
     activation_fn = "gelu", # gelu-approximate
     num_classes = 2,
@@ -128,4 +128,4 @@ Trainer = ProtDiffusionTrainer(transformer=transformer,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train()
+    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/ProtDiffusion-IPR036736_RoPE_v5/checkpoints/checkpoint_4')

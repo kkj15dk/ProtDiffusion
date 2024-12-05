@@ -62,20 +62,20 @@ import os
 
 # latent 4
 config = VAETrainingConfig(
-    num_epochs=20, # the number of epochs to train for
+    num_epochs=30, # the number of epochs to train for
     batch_size=64, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
     mega_batch=240,
     pad_to_multiple_of=8,
-    gradient_accumulation_steps=8,
+    gradient_accumulation_steps=1,
     optimizer = "AdamW",
-    learning_rate=4e-6,
+    learning_rate=1e-6,
     lr_warmup_steps=10000,
     lr_schedule='constant',
     kl_warmup_steps=20000,
     kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
     kl_schedule='constant_with_warmup',
     save_image_model_steps=100000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v24.12_latent-4_conv_transpose"), # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v24.13_latent-4_conv_transpose"), # the model name locally and on the HF Hub
     total_checkpoints_limit=1, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0, # 5.0,
     max_len=2048, # 512 * 8 ((2**3))
@@ -92,7 +92,7 @@ dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 # dataset = load_from_disk('datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test-bad?_grouped')
-dataset = dataset.shuffle(config.seed + 18)
+dataset = dataset.shuffle(config.seed + 20)
 
 train_dataset = dataset['train']
 val_dataset = dataset['valid']
@@ -189,4 +189,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/protein-VAE-UniRef50_v24.11_latent-4_conv_transpose/checkpoints/checkpoint_7')
+    Trainer.train(from_checkpoint='/work3/s204514/protein-VAE-UniRef50_v24.12_latent-4_conv_transpose/Epoch_19')

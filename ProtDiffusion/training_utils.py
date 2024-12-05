@@ -637,7 +637,6 @@ class BatchSampler(Sampler):
 
 @dataclass
 class TrainingVariables:
-    Epoch: int = 0
     global_step: int = 0
     val_loss: float = float("inf")
     max_len_start: int = 0
@@ -765,12 +764,16 @@ class VAETrainer:
         return kl_weight
 
     def update_max_len(self):
+        # double the max length, max_len_start, up till the cap, max_len
+        if self.training_variables.max_len_start > self.config.max_len:
+            self.training_variables.max_len_start = self.config.max_len
+            print(f"Somehow, the current batch max length was higher than the cap, setting it to the cap. This should not be able to happen, but I wont throw an error.")
         if self.training_variables.max_len_start < self.config.max_len:
-            self.training_variables.max_len_start *= 2
-            self.training_variables.max_len_start = min(self.training_variables.max_len_start, self.config.max_len) # To not have an int exploding to infinity in the background
-            max_len = min(self.training_variables.max_len_start, self.config.max_len)
-            print(f"Updating max_len to {max_len}")
-            self.train_dataloader.batch_sampler.max_length = max_len
+            self.training_variables.max_len_start = min(self.training_variables.max_len_start * 2, self.config.max_len) # To not have an int exploding to infinity in the background
+            print(f"Updating the batch max length to {self.training_variables.max_len_start}")
+        
+        self.train_dataloader.batch_sampler.max_length = self.training_variables.max_len_start
+
 
     def scale_gradients(self, 
                         m: nn.Module, 
@@ -920,6 +923,7 @@ class VAETrainer:
                 self.accelerator.print(f"Skipping {batches_to_skip} batches (randomly)")
                 self.accelerator.print(f"Current validation loss: {self.training_variables.val_loss}")
                 self.accelerator.print(f"Current max length: {self.training_variables.max_len_start}")
+                self.train_dataloader.batch_sampler.max_length = self.training_variables.max_len_start # Important! this should be refactored for clarity, but for now, I'll update the max len here.
 
         # Now you train the model
         self.model.train()
@@ -1111,6 +1115,7 @@ class ProtDiffusionTrainer:
         self.transformer: DiTTransformer1DModel
         self.vae: AutoencoderKL1D
         self.tokenizer: PreTrainedTokenizerFast
+        self.optimizer: torch.optim.Optimizer
 
         assert isinstance(noise_scheduler, (DDPMScheduler, FlowMatchingEulerScheduler)), "The noise scheduler must be an instance of KarrasDiffusionSchedulers or FlowMatchingEulerScheduler"
         # Figure out if we are doing flow (matching) or diffusion
@@ -1233,12 +1238,15 @@ class ProtDiffusionTrainer:
         self.label_key = self.train_dataloader.dataset.label_key
 
     def update_max_len(self):
+        # double the max length, max_len_start, up till the cap, max_len
+        if self.training_variables.max_len_start > self.config.max_len:
+            self.training_variables.max_len_start = self.config.max_len
+            print(f"Somehow, the current batch max length was higher than the cap, setting it to the cap. This should not be able to happen, but I wont throw an error.")
         if self.training_variables.max_len_start < self.config.max_len:
-            self.training_variables.max_len_start *= 2
-            self.training_variables.max_len_start = min(self.training_variables.max_len_start, self.config.max_len) # To not have an int exploding to infinity in the background
-            max_len = min(self.training_variables.max_len_start, self.config.max_len)
-            print(f"Updating max_len to {max_len}")
-            self.train_dataloader.batch_sampler.max_length = max_len
+            self.training_variables.max_len_start = min(self.training_variables.max_len_start * 2, self.config.max_len) # To not have an int exploding to infinity in the background
+            print(f"Updating the batch max length to {self.training_variables.max_len_start}")
+        
+        self.train_dataloader.batch_sampler.max_length = self.training_variables.max_len_start
 
     def scale_gradients(self, 
                         m: nn.Module, 
@@ -1456,20 +1464,29 @@ class ProtDiffusionTrainer:
                 self.training_variables.max_len_start = self.config.max_len_start
                 self.training_variables.n_tokens = 0
             else:
+                # print(f"Before optimizer: {self.optimizer}")
                 self.accelerator.load_state(input_dir=from_checkpoint)
                 # Skip the first batches
                 starting_epoch = self.training_variables.global_step // len(self.train_dataloader)
                 batches_to_skip = self.training_variables.global_step % len(self.train_dataloader)
-                skipped_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, batches_to_skip)
+                if batches_to_skip != 0:
+                    skipped_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, batches_to_skip)
+                else:
+                    skipped_dataloader = self.train_dataloader
                 print(f"Loaded checkpoint from {from_checkpoint}")
                 print(f"Starting from epoch {starting_epoch}")
                 print(f"Starting from step {self.training_variables.global_step}")
                 print(f"Skipping {batches_to_skip} batches (randomly)")
                 print(f"Current validation loss: {self.training_variables.val_loss}")
                 print(f"Current max length: {self.training_variables.max_len_start}")
+                print(f"before: {self.train_dataloader.batch_sampler.max_length}")
+                self.train_dataloader.batch_sampler.max_length = self.training_variables.max_len_start # Important! this should be refactored for clarity, but for now, I'll update the max len here.
+                print(f"after: {self.train_dataloader.batch_sampler.max_length}")
+                # print(f"loaded optimizer: {self.optimizer}")
 
         # Now you train the model
         self.transformer.train()
+        self.vae.eval()
         
         for epoch in range(starting_epoch, self.config.num_epochs):
 
@@ -1489,9 +1506,12 @@ class ProtDiffusionTrainer:
                     input_ids: torch.IntTensor = batch['input_ids']
                     attention_mask: torch.BoolTensor = batch['attention_mask']
                     label: torch.IntTensor = batch['label']
+                    # if step == 0:
+                    #     print("first batch")
+                    #     print(f"{input_ids}")
 
-                    vae_encoded: EncoderKLOutput1D = self.vae.encode(x = input_ids,
-                                                attention_mask = attention_mask,
+                    vae_encoded = self.vae.encode(x = input_ids,
+                                                  attention_mask = attention_mask,
                     )
 
                     attention_mask = vae_encoded.attention_masks[-1]

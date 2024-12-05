@@ -923,7 +923,9 @@ class VAETrainer:
                 self.accelerator.print(f"Skipping {batches_to_skip} batches (randomly)")
                 self.accelerator.print(f"Current validation loss: {self.training_variables.val_loss}")
                 self.accelerator.print(f"Current max length: {self.training_variables.max_len_start}")
+                print(f"max length before: {self.train_dataloader.batch_sampler.max_length}")
                 self.train_dataloader.batch_sampler.max_length = self.training_variables.max_len_start # Important! this should be refactored for clarity, but for now, I'll update the max len here.
+                print(f"max length after: {self.train_dataloader.batch_sampler.max_length}")
 
         # Now you train the model
         self.model.train()
@@ -1479,9 +1481,9 @@ class ProtDiffusionTrainer:
                 print(f"Skipping {batches_to_skip} batches (randomly)")
                 print(f"Current validation loss: {self.training_variables.val_loss}")
                 print(f"Current max length: {self.training_variables.max_len_start}")
-                print(f"before: {self.train_dataloader.batch_sampler.max_length}")
+                print(f"max length before: {self.train_dataloader.batch_sampler.max_length}")
                 self.train_dataloader.batch_sampler.max_length = self.training_variables.max_len_start # Important! this should be refactored for clarity, but for now, I'll update the max len here.
-                print(f"after: {self.train_dataloader.batch_sampler.max_length}")
+                print(f"max length after: {self.train_dataloader.batch_sampler.max_length}")
                 # print(f"loaded optimizer: {self.optimizer}")
 
         # Now you train the model

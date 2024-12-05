@@ -18,12 +18,12 @@ config = ProtDiffusionTrainingConfig(
     batch_size=64,
     mega_batch=240,
     gradient_accumulation_steps=1,
-    learning_rate=2e-5,
+    learning_rate=2e-4,
     lr_warmup_steps=500, # 100
     lr_schedule='constant', # 'cosine'
     save_image_model_steps=1000000,
     save_epochs=1, # Inference test with EMA model
-    output_dir=os.path.join("output","ProtDiffusion-IPR036736_RoPE_v5.2.2"),  # the model name locally and on the HF Hub
+    output_dir=os.path.join("output","ProtDiffusion-IPR036736_RoPE_v4.2"),  # the model name locally and on the HF Hub
     total_checkpoints_limit=5, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     pad_to_multiple_of=8,
@@ -128,4 +128,4 @@ Trainer = ProtDiffusionTrainer(transformer=transformer,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/ProtDiffusion-IPR036736_RoPE_v5/checkpoints/checkpoint_4')
+    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/ProtDiffusion-IPR036736_RoPE_v4/checkpoints/checkpoint_4')

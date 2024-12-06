@@ -91,10 +91,10 @@ print("length of val dataloader: ", len(val_dataloader))
 
 # %%
 transformer = DiTTransformer1DModel(
-    num_attention_heads = 8,
+    num_attention_heads = 12,
     attention_head_dim = 64,
     in_channels = vae.config.latent_channels,
-    num_layers = 8,
+    num_layers = 12,
     attention_bias = True,
     activation_fn = "gelu", # gelu-approximate
     num_classes = 2,

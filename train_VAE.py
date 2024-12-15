@@ -8,83 +8,58 @@ from ProtDiffusion.models.autoencoder_kl_1d import AutoencoderKL1D
 
 import os
 
-# # latent 2_v2
+
+# latent 2
+config = VAETrainingConfig(
+    num_epochs=20, # the number of epochs to train for
+    batch_size=64, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
+    mega_batch=240,
+    pad_to_multiple_of=8,
+    gradient_accumulation_steps=1,
+    optimizer = "AdamW",
+    learning_rate=1e-4,
+    lr_warmup_steps=10000,
+    lr_schedule='cosine_100x_decay',
+    kl_warmup_steps=20000,
+    kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
+    kl_schedule='constant_with_restarts',
+    save_image_model_steps=100000,
+    output_dir=os.path.join("output","protein-VAE-UniRef50_v25.3"), # the model name locally and on the HF Hub
+    total_checkpoints_limit=1, # the maximum number of checkpoints to keep
+    gradient_clip_val=1.0, # 5.0,
+    max_len=2048, # 512 * 8 ((2**3))
+    max_len_start=256,
+    max_len_doubling_steps=1000000,
+    ema_decay=0.9999,
+    ema_update_after=10000,
+    ema_update_every=1,
+)
+
+# # latent 4
 # config = VAETrainingConfig(
-#     num_epochs=10, # the number of epochs to train for
-#     batch_size=128, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
+#     num_epochs=20, # the number of epochs to train for
+#     batch_size=64, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
 #     mega_batch=240,
 #     pad_to_multiple_of=8,
-#     gradient_accumulation_steps=8,
+#     gradient_accumulation_steps=1,
 #     optimizer = "AdamW",
-#     learning_rate=4e-4,
+#     learning_rate=1e-4,
 #     lr_warmup_steps=10000,
 #     lr_schedule='cosine_100x_decay',
 #     kl_warmup_steps=20000,
 #     kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
 #     kl_schedule='constant_with_warmup',
 #     save_image_model_steps=100000,
-#     output_dir=os.path.join("output","protein-VAE-UniRef50_v25.5_latent-2_conv_transpose"), # the model name locally and on the HF Hub
+#     output_dir=os.path.join("output","protein-VAE-UniRef50_v25"), # the model name locally and on the HF Hub
 #     total_checkpoints_limit=1, # the maximum number of checkpoints to keep
 #     gradient_clip_val=1.0, # 5.0,
 #     max_len=2048, # 512 * 8 ((2**3))
-#     max_len_start=128,
-#     max_len_doubling_steps=2000000,
-#     ema_decay=0.999,
-#     ema_update_after=10000,
-#     ema_update_every=1,
-# )
-
-# # latent 2
-# config = VAETrainingConfig(
-#     num_epochs=12, # the number of epochs to train for
-#     batch_size=128, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
-#     mega_batch=240,
-#     pad_to_multiple_of=8,
-#     gradient_accumulation_steps=2,
-#     optimizer = "AdamW",
-#     learning_rate=4e-6,
-#     lr_warmup_steps=10000,
-#     lr_schedule='cosine_10x_decay',
-#     kl_warmup_steps=20000,
-#     kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
-#     kl_schedule='constant_with_warmup',
-#     save_image_model_steps=100000,
-#     output_dir=os.path.join("output","protein-VAE-UniRef50_v25.5_latent-2_conv_transpose"), # the model name locally and on the HF Hub
-#     total_checkpoints_limit=1, # the maximum number of checkpoints to keep
-#     gradient_clip_val=1.0, # 5.0,
-#     max_len=1024, # 512 * 8 ((2**3))
 #     max_len_start=256,
-#     max_len_doubling_steps=1000000,
+#     max_len_doubling_steps=1500000,
 #     ema_decay=0.99,
 #     ema_update_after=10000,
 #     ema_update_every=1,
 # )
-
-# latent 4
-config = VAETrainingConfig(
-    num_epochs=30, # the number of epochs to train for
-    batch_size=64, # 24 batch size seems to be the max with 16384 as max_len for 32 GB GPU right now. With batch_size=32, it crashes wit CUDA OOM error, TODO: Should look into memory management optimisation.
-    mega_batch=240,
-    pad_to_multiple_of=8,
-    gradient_accumulation_steps=1,
-    optimizer = "AdamW",
-    learning_rate=1e-6,
-    lr_warmup_steps=10000,
-    lr_schedule='constant',
-    kl_warmup_steps=20000,
-    kl_weight=1e-6, # https://www.reddit.com/r/StableDiffusion/comments/1bo8d3k/why_not_use_ae_rather_than_vae_in_the_stable/
-    kl_schedule='constant_with_warmup',
-    save_image_model_steps=100000,
-    output_dir=os.path.join("output","protein-VAE-UniRef50_v24.13_latent-4_conv_transpose"), # the model name locally and on the HF Hub
-    total_checkpoints_limit=1, # the maximum number of checkpoints to keep
-    gradient_clip_val=1.0, # 5.0,
-    max_len=2048, # 512 * 8 ((2**3))
-    max_len_start=256,
-    max_len_doubling_steps=1500000,
-    ema_decay=0.99,
-    ema_update_after=10000,
-    ema_update_every=1,
-)
 print("Output dir: ", config.output_dir)
 set_seed(config.seed) # Set the random seed for reproducibility
 
@@ -92,7 +67,7 @@ dataset = load_from_disk('/work3/s204514/UniRef50_grouped')
 # dataset = load_from_disk('datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50_grouped')
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/UniRef50-test-bad?_grouped')
-dataset = dataset.shuffle(config.seed + 20)
+dataset = dataset.shuffle(config.seed + 3) 
 
 train_dataset = dataset['train']
 val_dataset = dataset['valid']
@@ -169,7 +144,7 @@ model = AutoencoderKL1D(
     layers_per_block=2,  # how many ResNet layers to use per UNet block
     transformer_layers_per_block=1, # how many transformer layers to use per ResNet layer. Not implemented yet.
 
-    latent_channels=4,  # the dimensionality of the latent space
+    latent_channels=2,  # the dimensionality of the latent space
 
     num_attention_heads=1,  # the number of attention heads in the spatial self-attention blocks
     upsample_type="conv_transpose", # the type of upsampling to use, either 'conv' (and nearest neighbor) or 'conv_transpose'
@@ -189,4 +164,4 @@ Trainer = VAETrainer(model,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/work3/s204514/protein-VAE-UniRef50_v24.12_latent-4_conv_transpose/Epoch_19')
+    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/protein-VAE-UniRef50_v25.2/checkpoints/checkpoint_10')

@@ -14,7 +14,7 @@ import os
 import math
 
 config = ProtDiffusionTrainingConfig(
-    num_epochs=200, # the number of epochs to train for
+    num_epochs=300, # the number of epochs to train for
     batch_size=64,
     mega_batch=240,
     gradient_accumulation_steps=1,
@@ -22,9 +22,9 @@ config = ProtDiffusionTrainingConfig(
     lr_warmup_steps=500, # 100
     lr_schedule='constant', # 'cosine'
     save_image_model_steps=1000000,
-    save_epochs=1, # Inference test with EMA model
-    output_dir=os.path.join("output","ProtDiffusion-IPR036736_RoPE_v4.2"),  # the model name locally and on the HF Hub
-    total_checkpoints_limit=5, # the maximum number of checkpoints to keep
+    save_epochs=10, # Inference test with EMA model
+    output_dir=os.path.join("output","ProtDiffusion-IPR036736_RoPE_v4.5"),  # the model name locally and on the HF Hub
+    total_checkpoints_limit=1, # the maximum number of checkpoints to keep
     gradient_clip_val=1.0,
     pad_to_multiple_of=8,
     max_len=2048, # 512 * 2**6
@@ -50,11 +50,13 @@ tokenizer = PreTrainedTokenizerFast.from_pretrained("/zhome/fb/0/155603/ProtDiff
 
 # dataset = load_from_disk('/home/kkj/ProtDiffusion/datasets/IPR036736_90_grouped')
 dataset = load_from_disk('/work3/s204514/IPR036736_90_grouped')
-dataset = dataset.shuffle(config.seed)
 
 train_dataset = dataset['train']
 val_dataset = dataset['valid']
 test_dataset = dataset['test']
+
+# for restart
+train_dataset = train_dataset.shuffle(config.seed + 5)
 
 # Check dataset lengths
 print(f"Train dataset length: {len(train_dataset)}")
@@ -128,4 +130,4 @@ Trainer = ProtDiffusionTrainer(transformer=transformer,
 
 # %%
 if __name__ == '__main__':
-    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/ProtDiffusion-IPR036736_RoPE_v4/checkpoints/checkpoint_4')
+    Trainer.train(from_checkpoint='/zhome/fb/0/155603/output/ProtDiffusion-IPR036736_RoPE_v4.4/checkpoints/checkpoint_7')
